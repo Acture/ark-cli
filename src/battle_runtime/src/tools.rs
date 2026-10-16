@@ -1,6 +1,6 @@
-//! Third-party native tooling and the prebuilt owned Player, placed in owned state with pinned
-//! hashes: embedded in `bundled-native` builds, otherwise downloaded from pinned upstream files.
-use crate::bundle::NATIVE_BUNDLE;
+//! Third-party tools and the prebuilt owned Player, placed in owned state with pinned
+//! hashes: embedded in `bundled-tools` builds, otherwise downloaded from pinned upstream files.
+use crate::bundle::TOOL_BUNDLE;
 use crate::environment::{read_json, sha256_file, write_json};
 use anyhow::{bail, ensure, Context, Result};
 use ark_unity::{build, io};
@@ -65,15 +65,15 @@ const TOOLS: [Tool; 3] = [
 
 /// The prebuilt owned Player, published as a GitHub Release asset of this repository.
 const PLAYER: Archive = Archive {
-	name: "ark-battle-runtime-unity2021.3.39f1-r2.zip",
-	url: "https://github.com/Acture/ark-cli/releases/download/ark-battle-runtime-unity2021.3.39f1-r2/ark-battle-runtime-unity2021.3.39f1-r2.zip",
+	name: "ark-battle-runtime-0.0.1-unity2021.3.39f1.zip",
+	url: "https://github.com/Acture/ark-cli/releases/download/ark-battle-runtime-v0.0.1/ark-battle-runtime-0.0.1-unity2021.3.39f1.zip",
 	sha256: "804572ad72c05c2064e8528ab2bc001c79d77bb995c11996e46ff50f531da226",
 };
 const PLAYER_MANIFEST: &str = "player-manifest.json";
 const LICENSES: &str = include_str!("../licenses/THIRD_PARTY.md");
 
 pub(crate) fn bundled(name: &str) -> Option<&'static [u8]> {
-	NATIVE_BUNDLE
+	TOOL_BUNDLE
 		.iter()
 		.find(|(file, _)| *file == name)
 		.map(|(_, bytes)| *bytes)

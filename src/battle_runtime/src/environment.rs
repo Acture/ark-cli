@@ -5,12 +5,12 @@ use std::path::PathBuf;
 use anyhow::{ensure, Result};
 
 #[derive(Clone, Debug)]
-pub struct HostConfig {
+pub struct RuntimeConfig {
 	pub state: PathBuf,
 	pub client: PathBuf,
 }
 
-impl HostConfig {
+impl RuntimeConfig {
 	pub fn resolve(state: Option<PathBuf>, client: Option<PathBuf>) -> Result<Self> {
 		let state: PathBuf = state
 			.or_else(|| std::env::var_os("ARK_BATTLE_RUNTIME_STATE").map(PathBuf::from))
@@ -62,7 +62,7 @@ fn discover() -> Result<PathBuf> {
 	Ok(found[0].clone())
 }
 
-impl HostConfig {
+impl RuntimeConfig {
 	/// Owned state alone, for maintainer tooling that never reads the official client.
 	pub fn state_only(state: Option<PathBuf>) -> Result<Self> {
 		let state: PathBuf = state

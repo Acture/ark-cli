@@ -78,11 +78,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Packaged source verification failed' }
           cargo build --locked -p arknights-cli --release
           if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
-      - name: Embed native tools and the prebuilt probe (Windows)
+      - name: Embed third-party tools and the prebuilt probe (Windows)
         if: runner.os == 'Windows'
         run: |
           # Pinned upstream wheels; the files inside are checked again by ark-battle-runtime.
-          $bundle = Join-Path $env:RUNNER_TEMP 'native-bundle'
+          $bundle = Join-Path $env:RUNNER_TEMP 'tool-bundle'
           New-Item -ItemType Directory -Path $bundle | Out-Null
           $wheels = @(
             @{ Url = 'https://files.pythonhosted.org/packages/ed/bc/f911995cae93fa8fd882a677f6bc304965db6f066bbabdee6e761762d512/typetreegeneratorapi-0.0.10-cp36-abi3-win_amd64.whl'
@@ -106,8 +106,8 @@ jobs:
           }
           cargo run --locked --release -p arknights-cli -- battle --state (Join-Path $env:RUNNER_TEMP 'probe-state') build-probe $bundle
           if ($LASTEXITCODE -ne 0) { throw 'Probe build failed' }
-          $env:ARK_NATIVE_BUNDLE_DIR = $bundle
-          cargo build --locked -p arknights-cli --release --features bundled-native
+          $env:ARK_BATTLE_RUNTIME_BUNDLE_DIR = $bundle
+          cargo build --locked -p arknights-cli --release --features bundled-tools
           if ($LASTEXITCODE -ne 0) { throw 'Bundled release build failed' }
       - name: Package and smoke test outside the checkout
         run: |

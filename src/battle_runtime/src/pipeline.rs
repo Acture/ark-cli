@@ -1,6 +1,6 @@
 use crate::{
 	comparison,
-	environment::HostConfig,
+	environment::RuntimeConfig,
 	maa, probe, program,
 	runtime::{self, Battle, Presentation, Request},
 	squad::{self, SquadTraining, Training},
@@ -80,8 +80,8 @@ impl RunOptions {
 	}
 }
 
-pub struct Host {
-	pub config: HostConfig,
+pub struct BattleRuntime {
+	pub config: RuntimeConfig,
 }
 struct Prepared {
 	level: PathBuf,
@@ -89,17 +89,17 @@ struct Prepared {
 	services: PathBuf,
 	plan: PathBuf,
 }
-impl Host {
-	pub fn new(config: HostConfig) -> Self {
+impl BattleRuntime {
+	pub fn new(config: RuntimeConfig) -> Self {
 		Self { config }
 	}
-	fn current_host(&self) -> Result<PathBuf> {
-		let pointer: Value = io::read_json(&self.config.state.join("current-host.json"))
+	fn current_player(&self) -> Result<PathBuf> {
+		let pointer: Value = io::read_json(&self.config.state.join("current-player.json"))
 			.context("Run `ark-cli battle setup` first")?;
 		Ok(PathBuf::from(
 			pointer["build"]
 				.as_str()
-				.context("Host build pointer missing")?,
+				.context("Player build pointer missing")?,
 		))
 	}
 	/// Prepare everything a run needs, idempotently: remember the client, place third-party
@@ -109,15 +109,15 @@ impl Host {
 		let tools: Value = crate::tools::ensure_tools(&self.config.state)?;
 		runtime::inventory(&self.config, true)?;
 		let probe = probe::build(&self.config)?;
-		let pointer = self.config.state.join("current-host.json");
+		let pointer = self.config.state.join("current-player.json");
 		let reuse: bool = matches!(player, PlayerSource::Installed)
 			&& pointer.is_file()
 			&& self
-				.current_host()
-				.and_then(|host| build::verified_player(&host))
+				.current_player()
+				.and_then(|build_record| build::verified_player(&build_record))
 				.is_ok();
-		let host: PathBuf = if reuse {
-			self.current_host()?
+		let build_record: PathBuf = if reuse {
+			self.current_player()?
 		} else {
 			match player {
 				PlayerSource::Build => build::build(
@@ -135,9 +135,9 @@ impl Host {
 				PlayerSource::Installed => crate::tools::install_player(&self.config.state, None)?,
 			}
 		};
-		build::verified_player(&host)?;
+		build::verified_player(&build_record)?;
 		let catalog = Catalog::new(&self.config.state, &self.config.client)?;
-		let mut request = Request::control(probe.clone(), host.clone());
+		let mut request = Request::control(probe.clone(), build_record.clone());
 		request.deadline = 10;
 		let (output, result) = runtime::run(&self.config, &request)?;
 		ensure!(
@@ -145,16 +145,19 @@ impl Host {
 			"Original runtime control failed: {}",
 			output.display()
 		);
-		io::write_json(&pointer, &json!({"build":host,"control_run":output}))?;
+		io::write_json(
+			&pointer,
+			&json!({"build":build_record,"control_run":output}),
+		)?;
 		let tables = self.tables(&catalog)?;
 		Ok(
-			json!({"passed":true,"client":self.config.client,"tools":tools,"host_build":host,"control_run":output,"probe":probe,"catalog":catalog.provenance(),"operators_exported":tables["characters"].as_object().map_or(0,|c|c.len()),"stages_exported":tables["stages"]["stages"].as_object().map_or(0,|s|s.len())}),
+			json!({"passed":true,"client":self.config.client,"tools":tools,"player_build":build_record,"control_run":output,"probe":probe,"catalog":catalog.provenance(),"operators_exported":tables["characters"].as_object().map_or(0,|c|c.len()),"stages_exported":tables["stages"]["stages"].as_object().map_or(0,|s|s.len())}),
 		)
 	}
 
 	/// Maintainer: package the current verified owned Player as the release asset.
 	pub fn package_player(&self, output: &Path) -> Result<Value> {
-		crate::tools::package_player(&self.current_host()?, output)
+		crate::tools::package_player(&self.current_player()?, output)
 	}
 
 	/// Maintainer: compile the probe locally and write it with its source digest for a release.
@@ -177,14 +180,14 @@ impl Host {
 		squad: &Value,
 		extra: &[String],
 	) -> Result<Prepared> {
-		let host = self.current_host()?;
+		let build_record = self.current_player()?;
 		let ids: Vec<Value> = squad["operators"]
 			.as_array()
 			.context("Squad operators missing")?
 			.iter()
 			.map(|op| json!([op["character_id"], op["skin_id"]]))
 			.collect();
-		let key_source = json!({"catalog":catalog.provenance(),"level":level_id,"squad":ids,"extra":extra,"host":io::sha256_file(&host)?,"revision":runtime::source_revision()?});
+		let key_source = json!({"catalog":catalog.provenance(),"level":level_id,"squad":ids,"extra":extra,"player":io::sha256_file(&build_record)?,"revision":runtime::source_revision()?});
 		let key = format!("{:x}", Sha256::digest(serde_json::to_vec(&key_source)?));
 		let cache = self
 			.config
@@ -222,7 +225,7 @@ impl Host {
 		}
 		eprintln!("INFO ark_battle_runtime: preparing original level {level_id}");
 		let level = catalog.prepare_level(level_id)?;
-		let mut request = Request::control(probe::build(&self.config)?, host.clone());
+		let mut request = Request::control(probe::build(&self.config)?, build_record.clone());
 		request.level = Some(level.clone());
 		request.deadline = 10;
 		let (decode_run, decoded) = runtime::run(&self.config, &request)?;
@@ -237,7 +240,7 @@ impl Host {
 				.context("Decoded level missing")?,
 		))?;
 		let (scene, services, plan) = catalog.prepare_scene_services(
-			&build::verified_player(&host)?,
+			&build::verified_player(&build_record)?,
 			&level,
 			&decoded,
 			squad,
@@ -256,7 +259,7 @@ impl Host {
 		})
 	}
 	fn tables(&self, catalog: &Catalog) -> Result<Value> {
-		let identity_inputs = json!({"catalog":catalog.provenance(),"source":runtime::source_revision()?,"host":io::sha256_file(&self.current_host()?)?,"runtime":runtime::inventory(&self.config,false)?});
+		let identity_inputs = json!({"catalog":catalog.provenance(),"source":runtime::source_revision()?,"player":io::sha256_file(&self.current_player()?)?,"runtime":runtime::inventory(&self.config,false)?});
 		let key = format!(
 			"{:x}",
 			Sha256::digest(serde_json::to_vec(&identity_inputs)?)
@@ -283,7 +286,7 @@ impl Host {
 			&json!({"schema":"ark-battle-squad-v2","operators":[]}),
 			&[],
 		)?;
-		let mut request = Request::control(probe::build(&self.config)?, self.current_host()?);
+		let mut request = Request::control(probe::build(&self.config)?, self.current_player()?);
 		request.services = Some(prepared.services.clone());
 		request.export_identities = true;
 		let (output, result) = runtime::run(&self.config, &request)?;
@@ -756,7 +759,7 @@ impl Host {
 		for attempt in 1..=options.resource_rounds {
 			let extra_list: Vec<String> = extra.iter().cloned().collect();
 			let prepared = self.prepare(&catalog, level_id, &squad, &extra_list)?;
-			let mut request = Request::control(probe::build(&self.config)?, self.current_host()?);
+			let mut request = Request::control(probe::build(&self.config)?, self.current_player()?);
 			request.level = Some(prepared.level);
 			request.scene = Some(prepared.scene.clone());
 			request.services = Some(prepared.services.clone());

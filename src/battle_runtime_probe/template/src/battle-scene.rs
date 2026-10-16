@@ -97,7 +97,7 @@ unsafe fn array_item(
 	)
 }
 
-// Matches the host's scene closure bound.
+// Matches the battle runtime's scene closure bound.
 const MAX_SCENE_BUNDLES: usize = 512;
 
 struct BundleRoots {

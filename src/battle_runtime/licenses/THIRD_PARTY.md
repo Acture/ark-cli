@@ -1,7 +1,7 @@
 # Third-party components
 
 `ark-cli battle setup` places these components in its owned state directory. A release built with
-the `bundled-native` feature embeds them; other builds download the pinned upstream wheels and
+the `bundled-tools` feature embeds them; other builds download the pinned upstream wheels and
 verify every hash. They restore stripped IL2CPP field descriptions; they never run game logic.
 
 | Component | Version | Files | Source | License |

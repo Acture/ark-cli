@@ -2,7 +2,8 @@ use std::{path::PathBuf, process::ExitCode};
 
 use anyhow::Result;
 use ark_battle_runtime::{
-	comparison, Host, HostConfig, LadderSearch, PlayerSource, Presentation, RunOptions, Training,
+	comparison, BattleRuntime, LadderSearch, PlayerSource, Presentation, RunOptions, RuntimeConfig,
+	Training,
 };
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::Value;
@@ -249,19 +250,21 @@ fn execute(args: BattleCommand) -> Result<Value> {
 	}
 	match &args.command {
 		Action::BuildProbe { output } => {
-			return Host::new(HostConfig::state_only(args.state)?).build_probe(output);
+			return BattleRuntime::new(RuntimeConfig::state_only(args.state)?).build_probe(output);
 		}
 		Action::Convert { input, output } => {
-			return Host::new(HostConfig::state_only(args.state)?).convert(input, output);
+			return BattleRuntime::new(RuntimeConfig::state_only(args.state)?)
+				.convert(input, output);
 		}
 		_ => {}
 	}
-	let host: Host = Host::new(HostConfig::resolve(args.state, args.client)?);
+	let runtime: BattleRuntime =
+		BattleRuntime::new(RuntimeConfig::resolve(args.state, args.client)?);
 	match args.command {
 		Action::Setup {
 			player_zip,
 			build_player,
-		} => host.setup(&match (player_zip, build_player) {
+		} => runtime.setup(&match (player_zip, build_player) {
 			(Some(zip), _) => PlayerSource::Archive(zip),
 			(None, true) => PlayerSource::Build,
 			(None, false) => PlayerSource::Installed,
@@ -272,7 +275,7 @@ fn execute(args: BattleCommand) -> Result<Value> {
 			training,
 			battle,
 			repeat,
-		} => host.run(
+		} => runtime.run(
 			&job,
 			squad.as_deref(),
 			&training.training(),
@@ -282,14 +285,14 @@ fn execute(args: BattleCommand) -> Result<Value> {
 			job,
 			output,
 			training,
-		} => host.squad_for(&job, &output, &training.training()),
+		} => runtime.squad_for(&job, &output, &training.training()),
 		Action::MinTraining {
 			job,
 			search,
 			per_operator,
 			allow_leaks,
 			battle,
-		} => host.ladder(
+		} => runtime.ladder(
 			&job,
 			&battle.options(false),
 			search.into(),
@@ -302,7 +305,7 @@ fn execute(args: BattleCommand) -> Result<Value> {
 			training,
 			battle,
 			max_delay,
-		} => host.margin(
+		} => runtime.margin(
 			&job,
 			squad.as_deref(),
 			&training.training(),
@@ -315,14 +318,14 @@ fn execute(args: BattleCommand) -> Result<Value> {
 			training,
 			battle,
 			waits,
-		} => host.advise(
+		} => runtime.advise(
 			&job,
 			squad.as_deref(),
 			&training.training(),
 			&battle.options(false),
 			&waits,
 		),
-		Action::PackagePlayer { output } => host.package_player(&output),
+		Action::PackagePlayer { output } => runtime.package_player(&output),
 		Action::Compare { .. } | Action::BuildProbe { .. } | Action::Convert { .. } => {
 			unreachable!()
 		}

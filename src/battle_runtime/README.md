@@ -13,8 +13,8 @@ provider is a normal workspace dependency. `unity/` contains the Unity project t
 C# Editor build entry point required by Unity's build pipeline. No Python interpreter is used
 by these packages.
 
-Probe sources and the Unity project template are embedded when the host library is compiled; the
-`bundled-native` feature also embeds the third-party tools and a prebuilt probe. The CLI
+Probe sources and the Unity project template are embedded when the runtime library is compiled; the
+`bundled-tools` feature also embeds the third-party tools and a prebuilt probe. The CLI
 materializes and verifies those exact bytes under owned state; execution does not read the source
 checkout or the original build machine's paths.
 
@@ -145,7 +145,7 @@ the kill counts in its events, a wait can be rewritten as an MAA kills condition
 
 Maintainers publish the owned Player and the probe bundle with hidden commands:
 `battle package-player OUTPUT.zip` packages the verified local Player with its complete inventory;
-`battle build-probe DIR` writes the probe DLL and its source digest for a `bundled-native` build.
+`battle build-probe DIR` writes the probe DLL and its source digest for a `bundled-tools` build.
 
 ## Execution and evidence
 
@@ -233,7 +233,7 @@ verified original terminal state, `battle-proof.json`. Control, level-decode and
 runs write `result.json`.
 Inputs include hashes of the entire effective Player, external resources, manifests, actions,
 squad, original runtime, source
-and host executable. External execution files are checked again after the process exits.
+and Player executable. External execution files are checked again after the process exits.
 `--repeat` starts another fresh Player and compares input hashes and normalized engine events.
 `ark-cli battle compare FIRST_RESULT_JSON SECOND_RESULT_JSON` compares saved evidence without starting a client
 or Player, and saves `repeatability.json` beside the second result.
@@ -242,7 +242,7 @@ Exit status is 0 when the original battle terminates naturally with every issued
 confirmed, and either all commands executed or the engine won first, and a requested repeat
 comparison passes; 1 means failed qualification and 2 means an error. A natural
 `original_loss` is a valid observation. `original_win` / `original_loss` are separate from Ark
-Solver's `ExpectedVictory` / `ExpectedDefeat`; the host does not certify official-client equivalence.
+Solver's `ExpectedVictory` / `ExpectedDefeat`; the runtime does not certify official-client equivalence.
 
 ## MAA profile `original-state-v3`
 
@@ -266,12 +266,12 @@ interval and retry limits. Results are therefore those of ideal timing.
 
 Nonzero delays, finite timeouts, timers, camera/bullet-time actions, challenge mode, location-only
 Skill/Retreat without a name and skill_usage 3 are rejected. Presence in the catalog
-alone does not guarantee that a stage's runtime dependencies can be hosted.
+alone does not guarantee that a stage's runtime dependencies can be loaded.
 
 ## Limits and validation
 
 The owned Player uses the Editor's matching Unity engine; the official client's UnityPlayer does
-not initialize in this host. Some presentation, story and
+not initialize in this runtime. Some presentation, story and
 camera features remain unavailable and appear in runtime diagnostics. Execution starts a fresh
 Player for each run, so loading dominates short battles.
 
@@ -281,5 +281,5 @@ cargo clippy -p ark-battle-runtime -p ark-unity --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Never commit client files, extracted resources, native tooling inputs, Player binaries or local
+Never commit client files, extracted resources, third-party tool inputs, Player binaries or local
 qualification evidence.

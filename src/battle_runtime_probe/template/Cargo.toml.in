@@ -14,7 +14,7 @@ test = false
 doctest = false
 bench = false
 
-# The DLL needs panic=abort and no CRT; keep these profiles out of the host application.
+# The DLL needs panic=abort and no CRT; keep these profiles out of the battle runtime.
 [workspace]
 
 [profile.dev]

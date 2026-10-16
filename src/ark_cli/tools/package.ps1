@@ -3,7 +3,7 @@ param(
 	[switch] $SkipBuild,
 	[ValidateSet('release', 'debug')]
 	[string] $Profile = 'release',
-	# Cargo features for the build, for example bundled-native for the Windows release.
+	# Cargo features for the build, for example bundled-tools for the Windows release.
 	[string[]] $Features = @()
 )
 

@@ -47,9 +47,10 @@ fn table(name: &str, base: &Path, paths: &[PathBuf]) -> String {
 	output
 }
 
-/// Release builds with `bundled-native` embed third-party tools and the prebuilt probe from
-/// `ARK_NATIVE_BUNDLE_DIR`; every other build embeds none and downloads or compiles instead.
-fn native_bundle() -> String {
+/// Release builds with `bundled-tools` embed third-party tools and the prebuilt probe from
+/// `ARK_BATTLE_RUNTIME_BUNDLE_DIR`; every other build embeds none and downloads or compiles
+/// instead.
+fn tool_bundle() -> String {
 	const FILES: [&str; 5] = [
 		"TypeTreeGeneratorAPI.dll",
 		"capstone.dll",
@@ -57,25 +58,25 @@ fn native_bundle() -> String {
 		"ArkBattleProbe.dll",
 		"probe-source-digest.txt",
 	];
-	println!("cargo:rerun-if-env-changed=ARK_NATIVE_BUNDLE_DIR");
-	if env::var_os("CARGO_FEATURE_BUNDLED_NATIVE").is_none() {
-		return "pub const NATIVE_BUNDLE: &[(&str, &[u8])] = &[];
+	println!("cargo:rerun-if-env-changed=ARK_BATTLE_RUNTIME_BUNDLE_DIR");
+	if env::var_os("CARGO_FEATURE_BUNDLED_TOOLS").is_none() {
+		return "pub const TOOL_BUNDLE: &[(&str, &[u8])] = &[];
 "
 		.to_owned();
 	}
 	let directory: PathBuf = PathBuf::from(
-		env::var_os("ARK_NATIVE_BUNDLE_DIR")
-			.expect("bundled-native requires ARK_NATIVE_BUNDLE_DIR with the native bundle files"),
+		env::var_os("ARK_BATTLE_RUNTIME_BUNDLE_DIR")
+			.expect("bundled-tools requires ARK_BATTLE_RUNTIME_BUNDLE_DIR with the bundle files"),
 	);
 	let paths: Vec<PathBuf> = FILES.iter().map(|name| directory.join(name)).collect();
 	for path in &paths {
 		assert!(
 			path.is_file(),
-			"native bundle file missing: {}",
+			"tool bundle file missing: {}",
 			path.display()
 		);
 	}
-	table("NATIVE_BUNDLE", &directory, &paths)
+	table("TOOL_BUNDLE", &directory, &paths)
 }
 
 fn main() {
@@ -86,7 +87,7 @@ fn main() {
 	for directory in [&manifest, &unity] {
 		println!("cargo:rerun-if-changed={}", directory.display());
 	}
-	output.push_str(&native_bundle());
+	output.push_str(&tool_bundle());
 	let generated: PathBuf = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("bundled.rs");
 	fs::write(generated, output).expect("write bundled tooling index");
 }

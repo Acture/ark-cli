@@ -16,7 +16,7 @@ or its ancestors, then beside the executable. Relative configured paths are rela
 config file. Without a config, defaults are `assets`, `client`, and `client/_gamedata` under the
 working directory. Edit the bundled config or supply `ROGUE_CONFIG` for your local data layout.
 
-The executable can run outside its source checkout. The native probe sources and Unity template
+The executable can run outside its source checkout. The probe sources and Unity template
 are embedded in the executable. Original battles require Windows x64 and a user-owned official
 client; run `ark-cli battle setup`, then `ark-cli battle run JOB.json`. The Windows release also
 embeds the third-party TypeTreeGeneratorAPI, Capstone and TPK files and a prebuilt probe (notices in
@@ -47,24 +47,24 @@ After the initial crate release, install directly with `cargo install arknights-
 The CLI source package includes its unit and integration tests. Test fixtures are generated
 in temporary directories and require no client files or repository checkout.
 
-To package a local host build on macOS or Linux:
+To package a local build on macOS or Linux:
 
 ```sh
 bash src/ark_cli/tools/package.sh
 bash src/ark_cli/tools/package.sh --skip-build --debug
 ```
 
-On Windows, invoke the PowerShell packaging script. The release workflow first assembles the native
-bundle (pinned wheels plus `ark-cli battle build-probe`) and builds with `bundled-native`:
+On Windows, invoke the PowerShell packaging script. The release workflow first assembles the tool
+bundle (pinned wheels plus `ark-cli battle build-probe`) and builds with `bundled-tools`:
 
 ```powershell
 ./src/ark_cli/tools/package.ps1
 ./src/ark_cli/tools/package.ps1 -SkipBuild -Profile debug
-$env:ARK_NATIVE_BUNDLE_DIR = 'path/to/bundle'; ./src/ark_cli/tools/package.ps1 -Features bundled-native
+$env:ARK_BATTLE_RUNTIME_BUNDLE_DIR = 'path/to/bundle'; ./src/ark_cli/tools/package.ps1 -Features bundled-tools
 ```
 
 The owned Player archive, the battle runtime, is published separately under the tag
-`ark-battle-runtime-unity2021.3.39f1-r2`, from `ark-cli battle package-player`; its SHA-256 is
+`ark-battle-runtime-v0.0.1`, from `ark-cli battle package-player`; its SHA-256 is
 pinned in `src/battle_runtime/src/tools.rs`.
 
 Packaging defaults to a locked release build. Debug flags use `target/debug` for local checks;
@@ -86,7 +86,7 @@ the internal dependency versions have been published. Then explicitly publish wi
 development and the declared crate versions for published source packages.
 
 The repository's `.github/workflows/release.yml` builds and packages Windows x64, macOS arm64,
-and Linux x64 executables. A pushed tag such as `ark-cli-v0.2.0` attaches the archives and SHA256
+and Linux x64 executables. A pushed tag such as `ark-cli-v0.0.1` attaches the archives and SHA256
 files to the corresponding GitHub Release. A manual `workflow_dispatch` run builds and validates
 packages without creating a release. Publishing the crates and pushing a release tag require
 explicit release actions; local build and packaging commands perform no remote publication.

@@ -15,7 +15,7 @@ then a file beside the executable. With no file, built-in `assets`, `client` and
 Legacy extraction discovers a checkout-local `vendor/ark-unpacker`, an executable-adjacent
 `tools/ark-unpacker`, or an explicit `ARK_UNPACKER_ROOT`. `ARK_UNPACKER_PYTHON` overrides its Python
 executable. The TypeTree exporter is embedded; the third-party tool and interpreter are external
-inputs. Original-engine native execution uses the separate Rust host and Unity packages.
+inputs. Original-engine battles use the separate battle runtime and Unity packages.
 
 ```fish
 cargo test -p ark-solver

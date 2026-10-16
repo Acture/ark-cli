@@ -1,6 +1,6 @@
 //! Portable source package for the Windows x64 no-CRT Unity preloaded plugin.
 //!
-//! The host materializes these exact bytes into its owned state directory, then builds the
+//! The battle runtime materializes these exact bytes into its owned state directory, then builds the
 //! isolated DLL with its own panic-abort profile. Linking this library never builds the DLL.
 
 /// Relative paths and source bytes of the isolated, dependency-free Cargo DLL project.

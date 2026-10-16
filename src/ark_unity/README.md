@@ -39,8 +39,8 @@ cargo clippy -p ark-unity --all-targets -- -D warnings
 ```
 
 The installed-client resource qualification is ignored by default. It requires `ARK_PC_CLIENT`,
-staged native inputs, and existing qualified reference plan/host records in `assets/battle-runtime`.
-Use `ARK_RESOURCE_REFERENCE_PLAN` and `ARK_RESOURCE_REFERENCE_HOST` to select explicit records:
+staged native inputs, and existing qualified reference plan/Player records in `assets/battle-runtime`.
+Use `ARK_RESOURCE_REFERENCE_PLAN` and `ARK_RESOURCE_REFERENCE_PLAYER` to select explicit records:
 
 ```powershell
 cargo test -p ark-unity assets::catalog::tests::installed_client -- --ignored --nocapture

@@ -14,7 +14,7 @@ mod squad;
 mod tools;
 
 pub mod comparison;
-pub use environment::HostConfig;
-pub use pipeline::{Host, LadderSearch, PlayerSource, RunOptions, RunReport};
+pub use environment::RuntimeConfig;
+pub use pipeline::{BattleRuntime, LadderSearch, PlayerSource, RunOptions, RunReport};
 pub use runtime::Presentation;
 pub use squad::{SquadTraining, Training};

@@ -1,6 +1,6 @@
 [package]
 name = "arknights-cli"
-version = "0.2.0"
+version = "0.0.1"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
@@ -16,8 +16,8 @@ name = "ark-cli"
 path = "src/main.rs"
 
 [dependencies]
-ark-solver = { version = "0.2.0", path = "../ark_solver" }
-ark-battle-runtime = { version = "0.2.0", path = "../battle_runtime" }
+ark-solver = { version = "0.0.1", path = "../ark_solver" }
+ark-battle-runtime = { version = "0.0.1", path = "../battle_runtime" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -25,4 +25,4 @@ serde_json = "1"
 
 [features]
 # Release builds: embed the battle runtime's third-party tools and prebuilt probe.
-bundled-native = ["ark-battle-runtime/bundled-native"]
+bundled-tools = ["ark-battle-runtime/bundled-tools"]

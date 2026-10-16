@@ -68,7 +68,7 @@ unsafe fn event_line(kind: &str, unit: i32, value: i64) {
 }
 
 // The raw fixed-point value of an original FP; the first enemy's maximum hit points are also
-// recorded as text once, so the host can derive the scale.
+// recorded as text once, so the battle runtime can derive the scale.
 unsafe fn fixed_raw(api: &Api, value: Pointer) -> i64 {
 	(api.unbox)(value).cast::<i64>().read()
 }

@@ -320,7 +320,7 @@ impl Catalog {
 
 	pub fn prepare_scene_services(
 		&self,
-		host_player: &Path,
+		player: &Path,
 		level_inputs: &Path,
 		decoded_level: &Value,
 		squad: &Value,
@@ -337,7 +337,7 @@ impl Catalog {
 		write_json(&plan_path, &plan)?;
 		let scene_path: PathBuf = self.prepare_scene(&plan)?;
 		let services_path: PathBuf =
-			super::services::prepare(self, host_player, &scene_path, level_inputs)?;
+			super::services::prepare(self, player, &scene_path, level_inputs)?;
 		Ok((scene_path, services_path, plan_path))
 	}
 
@@ -994,7 +994,7 @@ mod tests {
 		eprintln!("Rust level: {}", level.display());
 		let scene: PathBuf = catalog.prepare_scene(&plan).unwrap();
 		eprintln!("Rust scene: {}", scene.display());
-		let host: PathBuf = std::env::var_os("ARK_RESOURCE_REFERENCE_HOST")
+		let player: PathBuf = std::env::var_os("ARK_RESOURCE_REFERENCE_PLAYER")
 			.map(PathBuf::from)
 			.unwrap_or_else(|| {
 				latest_fixture(
@@ -1003,7 +1003,7 @@ mod tests {
 				)
 			});
 		let services: PathBuf =
-			super::super::services::prepare(&catalog, &host, &scene, &level).unwrap();
+			super::super::services::prepare(&catalog, &player, &scene, &level).unwrap();
 		eprintln!("Rust services: {}", services.display());
 		let record: Value = read_json(&services).unwrap();
 		assert_eq!(record["complete"], true);

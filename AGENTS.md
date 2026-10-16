@@ -28,7 +28,7 @@ README describes its boundaries.
 - `src/ark_unity/` (`ark-unity`): Unity asset processing, Player build and Windows compatibility;
   no Python worker or dependency on the solver's simulated battle types.
 - `src/battle_runtime_probe/` (`ark-battle-runtime-probe`): portable source provider for the isolated
-  Cargo `no_std` plugin. The host materializes `template/` and builds the DLL with its own
+  Cargo `no_std` plugin. The battle runtime materializes `template/` and builds the DLL with its own
   aborting-panic/no-CRT profile; importing the provider never builds the Windows DLL.
 
 Keep conceptual boundaries as modules. Introduce another package only for demonstrated independent

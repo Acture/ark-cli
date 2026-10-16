@@ -7,7 +7,7 @@ use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::environment::{read_json, sha256_file, write_json, HostConfig};
+use crate::environment::{read_json, sha256_file, write_json, RuntimeConfig};
 
 /// Digest of the probe sources compiled into this executable, independent of the toolchain.
 pub(crate) fn source_digest() -> String {
@@ -22,7 +22,7 @@ pub(crate) fn source_digest() -> String {
 }
 
 /// A probe DLL a release embedded, used only when built from exactly these probe sources.
-fn embedded(config: &HostConfig) -> Result<Option<PathBuf>> {
+fn embedded(config: &RuntimeConfig) -> Result<Option<PathBuf>> {
 	let (Some(dll), Some(recorded)) = (
 		crate::tools::bundled("ArkBattleProbe.dll"),
 		crate::tools::bundled("probe-source-digest.txt"),
@@ -50,7 +50,7 @@ fn embedded(config: &HostConfig) -> Result<Option<PathBuf>> {
 	Ok(Some(path))
 }
 
-pub(crate) fn build(config: &HostConfig) -> Result<PathBuf> {
+pub(crate) fn build(config: &RuntimeConfig) -> Result<PathBuf> {
 	ensure!(
 		cfg!(all(target_os = "windows", target_arch = "x86_64")),
 		"The original-engine probe requires Windows x64"
@@ -62,7 +62,7 @@ pub(crate) fn build(config: &HostConfig) -> Result<PathBuf> {
 }
 
 /// Compile the probe from the embedded sources with the local Rust toolchain and Windows SDK.
-pub(crate) fn compile(config: &HostConfig) -> Result<PathBuf> {
+pub(crate) fn compile(config: &RuntimeConfig) -> Result<PathBuf> {
 	let root: PathBuf =
 		crate::bundle::materialize(&config.state, "probe", crate::bundle::PROBE_FILES)?;
 	let manifest: PathBuf = root.join("Cargo.toml");

@@ -115,7 +115,7 @@ impl OwnedMap {
 
 pub(crate) fn prepare(
 	catalog: &Catalog,
-	host: &Path,
+	player: &Path,
 	scene_inputs: &Path,
 	level_inputs: &Path,
 ) -> Result<PathBuf> {
@@ -131,7 +131,7 @@ pub(crate) fn prepare(
 	);
 	let output: PathBuf = stage(&catalog.state, "services")?;
 	let mut trees: Trees = Trees::new(catalog, &scene)?;
-	let gm_source: PathBuf = host.join("ArkBattleRuntime_Data/globalgamemanagers");
+	let gm_source: PathBuf = player.join("ArkBattleRuntime_Data/globalgamemanagers");
 	let mut gm: File = File::parse(&fs::read(&gm_source)?)?;
 	trees.fill_builtins(&mut gm)?;
 	let manager: &Object = gm.one_class(147)?;
@@ -347,7 +347,7 @@ pub(crate) fn prepare(
 	for (_, class) in SETTINGS {
 		let original: &Object = original_gm.one_class(class)?;
 		let target: i64 = owned.gm.one_class(class)?.id;
-		// Both files are from the pinned engine. Validate the host's schema against
+		// Both files are from the pinned engine. Validate the Player's schema against
 		// the exact original bytes, then copy those bytes without numeric conversion.
 		let target_type: usize = owned.gm.object(target)?.type_index;
 		let target_tree: &Node = owned.gm.types[target_type]

@@ -1,4 +1,4 @@
-use crate::{environment::HostConfig, maa, squad};
+use crate::{environment::RuntimeConfig, maa, squad};
 use anyhow::{ensure, Context, Result};
 use ark_unity::{build, io, player};
 use serde_json::{json, Value};
@@ -49,7 +49,7 @@ pub enum Presentation {
 #[derive(Clone)]
 pub(crate) struct Request {
 	pub probe: PathBuf,
-	pub host_build: PathBuf,
+	pub player_build: PathBuf,
 	pub level: Option<PathBuf>,
 	pub scene: Option<PathBuf>,
 	pub services: Option<PathBuf>,
@@ -61,10 +61,10 @@ pub(crate) struct Request {
 	pub notes: Value,
 }
 impl Request {
-	pub fn control(probe: PathBuf, host_build: PathBuf) -> Self {
+	pub fn control(probe: PathBuf, player_build: PathBuf) -> Self {
 		Self {
 			probe,
-			host_build,
+			player_build,
 			level: None,
 			scene: None,
 			services: None,
@@ -97,7 +97,7 @@ pub(crate) fn source_revision() -> Result<Value> {
 	)
 }
 
-pub(crate) fn inventory(config: &HostConfig, record: bool) -> Result<Value> {
+pub(crate) fn inventory(config: &RuntimeConfig, record: bool) -> Result<Value> {
 	let mut files: BTreeMap<String, Value> = BTreeMap::new();
 	for (name, relative) in [
 		("GameAssembly.dll", "GameAssembly.dll"),
@@ -231,9 +231,9 @@ fn check(
 	Ok(())
 }
 
-pub(crate) fn run(config: &HostConfig, request: &Request) -> Result<(PathBuf, Value)> {
+pub(crate) fn run(config: &RuntimeConfig, request: &Request) -> Result<(PathBuf, Value)> {
 	let inventory = inventory(config, false)?;
-	let host = build::verified_player(&request.host_build)?;
+	let player_dir = build::verified_player(&request.player_build)?;
 	fn optional(path: &Option<PathBuf>) -> Result<Option<Value>> {
 		path.as_ref().map(|p| io::read_json(p)).transpose()
 	}
@@ -250,7 +250,7 @@ pub(crate) fn run(config: &HostConfig, request: &Request) -> Result<(PathBuf, Va
 			.join(output.file_name().unwrap()),
 	)?;
 	let result = (|| -> Result<Value> {
-		io::copy_tree(&host, &copied)?;
+		io::copy_tree(&player_dir, &copied)?;
 		for (name, relative) in [
 			("GameAssembly.dll", "GameAssembly.dll"),
 			("baselib.dll", "baselib.dll"),
@@ -523,7 +523,7 @@ pub(crate) fn run(config: &HostConfig, request: &Request) -> Result<(PathBuf, Va
 		result["effective_inputs"] = json!(effective);
 		result["execution_inputs"] = execution_inputs;
 		result["source_revision"] = source_revision()?;
-		result["inputs"] = json!({"probe":request.probe,"probe_sha256":io::sha256_file(&request.probe)?,"host_build":request.host_build,"level":request.level,"scene":request.scene,"services":request.services,"notes":request.notes});
+		result["inputs"] = json!({"probe":request.probe,"probe_sha256":io::sha256_file(&request.probe)?,"player_build":request.player_build,"level":request.level,"scene":request.scene,"services":request.services,"notes":request.notes});
 		if let Some(battle) = &request.battle {
 			result["battle_inputs"] = json!({"actions_source":battle.actions_source,"squad":battle.squad,"seed":battle.seed,"max_ticks":battle.max_ticks,"actions_sha256":io::sha256_file(&output.join("probe-actions.txt"))?,"squad_sha256":io::sha256_file(&output.join("squad.jsonl"))?});
 		}
@@ -548,7 +548,7 @@ fn execution_files(
 ) -> Result<BTreeMap<String, PathBuf>> {
 	let mut files: BTreeMap<String, PathBuf> = BTreeMap::new();
 	for (role, path) in [
-		("host/build", Some(&request.host_build)),
+		("player/build", Some(&request.player_build)),
 		("level/manifest", request.level.as_ref()),
 		("scene/manifest", request.scene.as_ref()),
 		("services/manifest", request.services.as_ref()),
