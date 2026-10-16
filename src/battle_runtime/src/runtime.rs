@@ -534,9 +534,37 @@ pub(crate) fn run(config: &RuntimeConfig, request: &Request) -> Result<(PathBuf,
 	// Verify the resolved absolute target again immediately before recursive cleanup.
 	if copied.exists() {
 		let checked = io::owned(&config.state, &copied)?;
-		fs::remove_dir_all(checked)?;
+		remove_exited_player(&checked)?;
 	}
 	Ok((output, result?))
+}
+
+/// Remove a Player copy after its process exits. Windows can keep its files locked for a moment
+/// longer (the Unity crash handler exiting, an antivirus scan), so a locked file is retried for
+/// up to five seconds before cleanup fails.
+fn remove_exited_player(path: &Path) -> Result<()> {
+	const ATTEMPTS: u32 = 20;
+	for attempt in 1..=ATTEMPTS {
+		match fs::remove_dir_all(path) {
+			Ok(()) => return Ok(()),
+			// Access denied (5) while an image is still mapped; sharing (32) or lock (33)
+			// violations while another process holds a handle.
+			Err(error)
+				if attempt < ATTEMPTS
+					&& (error.kind() == std::io::ErrorKind::PermissionDenied
+						|| matches!(error.raw_os_error(), Some(32 | 33))) =>
+			{
+				if attempt == 1 {
+					eprintln!("INFO ark_battle_runtime: waiting for the exited Player's files");
+				}
+				std::thread::sleep(std::time::Duration::from_millis(250));
+			}
+			Err(error) => {
+				return Err(error).with_context(|| format!("Remove {}", path.display()));
+			}
+		}
+	}
+	unreachable!("the last attempt returns")
 }
 
 fn execution_files(
@@ -855,5 +883,29 @@ mod tests {
 		let o = outcome(&r).unwrap();
 		assert_eq!(o["status"], "tick_budget_exhausted");
 		assert_eq!(o["terminal_verified"], false);
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn player_cleanup_waits_for_a_briefly_locked_file() {
+		use std::os::windows::fs::OpenOptionsExt;
+		let root: PathBuf =
+			std::env::temp_dir().join(format!("ark-player-cleanup-{}", std::process::id()));
+		fs::create_dir_all(&root).unwrap();
+		let locked: PathBuf = root.join("ArkBattleRuntime.exe");
+		fs::write(&locked, b"player").unwrap();
+		// No sharing: deleting the file fails until this handle closes.
+		let handle: fs::File = fs::OpenOptions::new()
+			.read(true)
+			.share_mode(0)
+			.open(&locked)
+			.unwrap();
+		let release = std::thread::spawn(move || {
+			std::thread::sleep(std::time::Duration::from_millis(600));
+			drop(handle);
+		});
+		remove_exited_player(&root).unwrap();
+		release.join().unwrap();
+		assert!(!root.exists());
 	}
 }
