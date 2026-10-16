@@ -1,0 +1,53 @@
+{
+	"minimum_required": "v6.0.0",
+	"stage_name": "act21mini_07",
+	"actions": [
+		{
+			"type": "Deploy",
+			"name": "奶盾",
+			"location": [3, 3],
+			"direction": "Right"
+		},
+		{
+			"type": "Deploy",
+			"name": "圣聆初雪",
+			"location": [3, 2],
+			"direction": "Right"
+		},
+		{
+			"type": "SpeedUp"
+		},
+		{
+			"type": "SkillDaemon"
+		}
+	],
+	"doc": {
+		"title": "BD-7",
+		"details": "Sanitized tracked fixture derived from a PRTS Plus guide."
+	},
+	"groups": [
+		{
+			"name": "奶盾",
+			"opers": [
+				{
+					"name": "黍",
+					"skill": 1,
+					"skill_usage": 0
+				},
+				{
+					"name": "塞雷娅",
+					"skill": 1,
+					"skill_usage": 0
+				}
+			]
+		}
+	],
+	"opers": [
+		{
+			"name": "圣聆初雪",
+			"skill": 2,
+			"skill_usage": 0
+		}
+	],
+	"difficulty": 3
+}

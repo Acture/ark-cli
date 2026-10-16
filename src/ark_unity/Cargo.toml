@@ -1,0 +1,28 @@
+[package]
+name = "ark-unity"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Acture/ark-cli"
+readme = "README.md"
+include = ["Cargo.toml", "README.md", "src/**"]
+description = "Owned Unity 2021.3 asset processing and Windows Player compatibility."
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+md-5 = "0.10"
+regex = "1"
+walkdir = "2"
+libloading = "0.8"
+lz4_flex = "0.12"
+unity-asset-binary = "=0.2.0"
+unity-asset-core = "=0.2.0"
+lzma-rs = "=0.3.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }

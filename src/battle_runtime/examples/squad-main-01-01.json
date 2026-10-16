@@ -1,0 +1,41 @@
+{
+  "schema": "ark-battle-squad-v2",
+  "operators": [
+    {
+      "character_id": "char_198_blackd",
+      "level": 60,
+      "phase": 2,
+      "potential_rank": 5,
+      "favor_battle_phase": 0,
+      "skill_index": 0,
+      "skill_level": 7
+    },
+    {
+      "character_id": "char_150_snakek",
+      "level": 60,
+      "phase": 2,
+      "potential_rank": 5,
+      "favor_battle_phase": 0,
+      "skill_index": 0,
+      "skill_level": 7
+    },
+    {
+      "character_id": "char_204_platnm",
+      "level": 60,
+      "phase": 2,
+      "potential_rank": 5,
+      "favor_battle_phase": 0,
+      "skill_index": 0,
+      "skill_level": 7
+    },
+    {
+      "character_id": "char_130_doberm",
+      "level": 60,
+      "phase": 2,
+      "potential_rank": 5,
+      "favor_battle_phase": 0,
+      "skill_index": 0,
+      "skill_level": 7
+    }
+  ]
+}

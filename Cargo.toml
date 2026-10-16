@@ -1,0 +1,10 @@
+[workspace]
+members = ["src/ark_cli", "src/ark_solver", "src/ark_unity", "src/battle_runtime", "src/battle_runtime_probe"]
+default-members = ["src/ark_cli"]
+resolver = "2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

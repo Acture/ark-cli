@@ -1,0 +1,162 @@
+name: Ark CLI release
+
+on:
+  push:
+    tags: ['ark-cli-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: windows-x86_64
+            flatc: Windows.flatc.binary.zip
+            sha256: fff9445c9db907227bc64b54cc98743084c4949282aa4e576cff6a955724ddc8
+          - os: macos-15
+            platform: macos-aarch64
+            flatc: Mac.flatc.binary.zip
+            sha256: 9340a5f9900b95e34ccadcb06bceec91180cc8b83098d5e966ed6d8d590cbba2
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+            flatc: Linux.flatc.binary.g++-13.zip
+            sha256: 9f87066dc5dfa7fe02090b55bab5f3e55df03e32c9b0cdf229004ade7d091039
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Install Rust and pinned FlatBuffers compiler
+        env:
+          FLATC_ASSET: ${{ matrix.flatc }}
+          FLATC_SHA256: ${{ matrix.sha256 }}
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { throw 'Rust selection failed' }
+          $archive = Join-Path $env:RUNNER_TEMP 'flatc.zip'
+          $directory = Join-Path $env:RUNNER_TEMP 'flatc'
+          Invoke-WebRequest "https://github.com/google/flatbuffers/releases/download/v25.12.19/$env:FLATC_ASSET" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $env:FLATC_SHA256) {
+            throw 'FlatBuffers download checksum mismatch'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $directory
+          if (-not $IsWindows) {
+            chmod +x (Join-Path $directory 'flatc')
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot make flatc executable' }
+          }
+          $directory | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Validate versions, workspace and packaged source
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_EVENT: ${{ github.event_name }}
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
+          $versions = @($metadata.packages.version | Sort-Object -Unique)
+          if ($versions.Count -ne 1) { throw 'Workspace release versions differ' }
+          if ($env:RELEASE_EVENT -eq 'push' -and $env:RELEASE_TAG -cne "ark-cli-v$($versions[0])") {
+            throw 'Release tag does not match the crate version'
+          }
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Clippy failed' }
+          cargo test --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+          cargo package --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged source verification failed' }
+          cargo build --locked -p arknights-cli --release
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+      - name: Embed native tools and the prebuilt probe (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # Pinned upstream wheels; the files inside are checked again by ark-battle-runtime.
+          $bundle = Join-Path $env:RUNNER_TEMP 'native-bundle'
+          New-Item -ItemType Directory -Path $bundle | Out-Null
+          $wheels = @(
+            @{ Url = 'https://files.pythonhosted.org/packages/ed/bc/f911995cae93fa8fd882a677f6bc304965db6f066bbabdee6e761762d512/typetreegeneratorapi-0.0.10-cp36-abi3-win_amd64.whl'
+               Sha256 = 'e96003e973c8d52d221b4ae50f377bcaf7538f2098e437d5383a1b7f13fa72ba'
+               Members = @('TypeTreeGeneratorAPI/TypeTreeGeneratorAPI.dll', 'TypeTreeGeneratorAPI/capstone.dll') },
+            @{ Url = 'https://files.pythonhosted.org/packages/5a/ff/916b14f08ebbf4ee30a29e4b5bec592ed62dc0c0b9276a95f903a1da102c/unitypy-1.25.4-cp312-cp312-win_amd64.whl'
+               Sha256 = '5e3f6fa44e23e7fc52a32f128d709a97901e0d10e3d87e0b602c5f5a58e3a4ef'
+               Members = @('UnityPy/resources/lzma.tpk') }
+          )
+          foreach ($wheel in $wheels) {
+            $archive = Join-Path $env:RUNNER_TEMP ([IO.Path]::GetFileName($wheel.Url) + '.zip')
+            Invoke-WebRequest $wheel.Url -OutFile $archive
+            if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $wheel.Sha256) {
+              throw "Wheel checksum mismatch: $($wheel.Url)"
+            }
+            $expanded = "$archive.d"
+            Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+            foreach ($member in $wheel.Members) {
+              Copy-Item -LiteralPath (Join-Path $expanded $member) -Destination $bundle
+            }
+          }
+          cargo run --locked --release -p arknights-cli -- battle --state (Join-Path $env:RUNNER_TEMP 'probe-state') build-probe $bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Probe build failed' }
+          $env:ARK_NATIVE_BUNDLE_DIR = $bundle
+          cargo build --locked -p arknights-cli --release --features bundled-native
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled release build failed' }
+      - name: Package and smoke test outside the checkout
+        run: |
+          if ($IsWindows) { & ./src/ark_cli/tools/package.ps1 -SkipBuild }
+          else { bash src/ark_cli/tools/package.sh --skip-build }
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+          $package = @(Get-ChildItem assets/releases -Directory)
+          if ($package.Count -ne 1) { throw 'Expected exactly one release package' }
+          $standalone = Join-Path $env:RUNNER_TEMP 'ark-cli-standalone'
+          Copy-Item -LiteralPath $package[0].FullName -Destination $standalone -Recurse
+          $executable = Join-Path $standalone $(if ($IsWindows) { 'ark-cli.exe' } else { 'ark-cli' })
+          Push-Location -LiteralPath $env:RUNNER_TEMP
+          try {
+            & $executable --version
+            if ($LASTEXITCODE -ne 0) { throw 'Standalone version failed' }
+            foreach ($group in @('level', 'ingest', 'battle')) {
+              & $executable $group --help
+              if ($LASTEXITCODE -ne 0) { throw "Standalone $group help failed" }
+            }
+          } finally { Pop-Location }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ark-cli-${{ matrix.platform }}
+          path: |
+            assets/releases/*.zip
+            assets/releases/*.tar.gz
+            assets/releases/*.sha256
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ark-cli-v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ark-cli-*
+          merge-multiple: true
+          path: release-assets
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $files = @(Get-ChildItem release-assets -File | Select-Object -ExpandProperty FullName)
+          if ($files.Count -ne 6) { throw 'Expected three archives and three checksum files' }
+          gh release create $env:RELEASE_TAG --verify-tag --generate-notes @files
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release creation failed' }

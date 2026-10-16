@@ -1,0 +1,10 @@
+[package]
+name = "ark-battle-runtime-probe"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Acture/ark-cli"
+readme = "README.md"
+description = "Embedded sources for an owned Windows Unity Player battle observation plugin."
+include = ["Cargo.toml", "README.md", "src/**", "template/**"]

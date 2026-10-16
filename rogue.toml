@@ -1,0 +1,8 @@
+# rogue project config.
+# Loaded by ark-cli ingest and local-data tests. Paths may be
+# absolute, or relative to the directory containing this file.
+# Override the file location with $ROGUE_CONFIG.
+
+assets_dir = "assets"
+client_dir = "client"
+gamedata_dir = "client/_gamedata"

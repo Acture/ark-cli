@@ -1,0 +1,47 @@
+# Rust
+/target/
+**/target/
+!/Cargo.lock
+Cargo.lock.bak
+*.rs.bk
+
+# Default generated client + asset roots (NEVER commit)
+/assets
+/client
+# Defense in depth: catch loose installers anywhere in tree
+*.apk
+*.xapk
+*.ipa
+*.obb
+
+# ArkUnpacker local runtime files
+/ArkUnpackerConfig.json
+/ArkUnpackerLogs.log
+
+# Local schema checkout
+/vendor/openarknightsfbs/
+
+# Python (uv)
+__pycache__/
+*.py[cod]
+.venv/
+.python-version
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# AI config — never commit these
+CLAUDE.md
+.cursorrules
+.copilot/
+.aider*
+GEMINI.md
+
+# Local worktrees
+/.worktrees/

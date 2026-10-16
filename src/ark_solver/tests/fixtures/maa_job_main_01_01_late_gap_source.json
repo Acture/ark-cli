@@ -1,0 +1,92 @@
+{
+	"minimum_required": "v6.0.0",
+	"stage_name": "main_01-01",
+	"actions": [
+		{
+			"type": "Deploy",
+			"name": "先手",
+			"location": [
+				4,
+				3
+			],
+			"direction": "Left"
+		},
+		{
+			"type": "Deploy",
+			"name": "阻挡",
+			"location": [
+				5,
+				3
+			],
+			"direction": "Right"
+		},
+		{
+			"type": "Deploy",
+			"name": "近卫",
+			"location": [
+				3,
+				3
+			],
+			"direction": "Left"
+		},
+		{
+			"type": "Deploy",
+			"name": "圣聆初雪",
+			"location": [
+				5,
+				2
+			],
+			"direction": "Left"
+		},
+		{
+			"type": "SpeedUp"
+		},
+		{
+			"type": "SkillDaemon"
+		}
+	],
+	"doc": {
+		"title": "1-1 late-wave gap level-solve source",
+		"details": "The reviewed roster with 圣聆初雪 as the replaceable slot, deployed last so a replacement's skill schedule can follow it. Without her the retained 讯使, 蛇屠箱 and 黍 clear the first two waves and leak only in the third."
+	},
+	"groups": [
+		{
+			"name": "先手",
+			"opers": [
+				{
+					"name": "讯使",
+					"skill": 1,
+					"skill_usage": 0
+				}
+			]
+		},
+		{
+			"name": "阻挡",
+			"opers": [
+				{
+					"name": "蛇屠箱",
+					"skill": 1,
+					"skill_usage": 0
+				}
+			]
+		},
+		{
+			"name": "近卫",
+			"opers": [
+				{
+					"name": "黍",
+					"skill": 1,
+					"skill_usage": 0
+				}
+			]
+		}
+	],
+	"opers": [
+		{
+			"name": "圣聆初雪",
+			"skill": 1,
+			"skill_usage": 0
+		}
+	],
+	"difficulty": 1
+}

@@ -1,0 +1,28 @@
+[package]
+name = "arknights-cli"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "Arknights toolbox: original-engine battles, offline solving, replay and data ingestion."
+repository = "https://github.com/Acture/ark-cli"
+readme = "README.md"
+keywords = ["arknights", "strategy", "cli", "replay"]
+categories = ["command-line-utilities", "games"]
+include = ["Cargo.toml", "Cargo.lock", "README.md", "RELEASE.md", "src/**", "tests/**"]
+
+[[bin]]
+name = "ark-cli"
+path = "src/main.rs"
+
+[dependencies]
+ark-solver = { version = "0.2.0", path = "../ark_solver" }
+ark-battle-runtime = { version = "0.2.0", path = "../battle_runtime" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# Release builds: embed the battle runtime's third-party tools and prebuilt probe.
+bundled-native = ["ark-battle-runtime/bundled-native"]

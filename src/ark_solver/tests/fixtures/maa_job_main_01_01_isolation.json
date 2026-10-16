@@ -1,0 +1,30 @@
+{
+	"minimum_required": "v6.0.0",
+	"stage_name": "main_01-01",
+	"actions": [
+		{
+			"type": "Deploy",
+			"name": "黍",
+			"location": [4, 3],
+			"direction": "Left"
+		},
+		{
+			"type": "SpeedUp"
+		},
+		{
+			"type": "SkillDaemon"
+		}
+	],
+	"doc": {
+		"title": "1-1 stage-isolation probe",
+		"details": "One operator whose prefabs are pinned, so the whole mechanic inventory is stage-side."
+	},
+	"opers": [
+		{
+			"name": "黍",
+			"skill": 1,
+			"skill_usage": 0
+		}
+	],
+	"difficulty": 1
+}

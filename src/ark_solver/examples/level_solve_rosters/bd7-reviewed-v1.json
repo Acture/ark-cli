@@ -1,0 +1,21 @@
+{
+	"schema_version": 1,
+	"operators": [
+		{
+			"operator": "char_002_amiya",
+			"skill": 1
+		},
+		{
+			"operator": "char_4133_logos",
+			"skill": 3
+		},
+		{
+			"operator": "char_190_clour",
+			"skill": 2
+		},
+		{
+			"operator": "char_103_angel",
+			"skill": 2
+		}
+	]
+}

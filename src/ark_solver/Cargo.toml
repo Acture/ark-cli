@@ -1,0 +1,33 @@
+[package]
+name = "ark-solver"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Acture/ark-cli"
+readme = "README.md"
+include = ["Cargo.toml", "README.md", "build.rs", "src/**", "schema/**", "tests/**", "examples/**", "tools/*.py", "tools/*.fish", "tools/tests/*.py"]
+description = "Arknights strategy analysis, replay verification, and data ingestion library."
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"
+flatbuffers = "25.12"
+glob = "0.3"
+good_lp = { version = "1.15.2", default-features = false, features = ["microlp"] }
+md-5 = "0.10"
+rayon = "1"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+toml = "1"
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustix = { version = "1", features = ["fs"] }

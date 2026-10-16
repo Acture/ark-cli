@@ -1,0 +1,101 @@
+namespace rogue.strategy;
+
+file_identifier "RGSA";
+file_extension "rgs";
+
+enum ExpectedStatus : ubyte {
+	Unsupported = 0,
+	ExpectedVictory = 1,
+	ExpectedDefeat = 2,
+	Incomplete = 3
+}
+
+enum DamageStatus : ubyte {
+	Unsupported = 0,
+	Feasible = 1,
+	Infeasible = 2
+}
+
+enum ActionKind : ubyte {
+	Deploy = 0,
+	Skill = 1,
+	Retreat = 2,
+	SpeedUp = 3,
+	SkillDaemon = 4,
+	Other = 5
+}
+
+enum Facing : byte {
+	None = 0,
+	Left = 1,
+	Right = 2,
+	Up = 3,
+	Down = 4
+}
+
+table ExactBuild {
+	operator_id:string (required);
+	elite:ubyte;
+	level:uint;
+	trust_percent:ushort;
+	potential_rank:ubyte;
+	skill_slot:ubyte;
+	skill_level:ubyte;
+	module_id:string;
+	module_level:ubyte;
+}
+
+table MaterializedAction {
+	action_index:uint;
+	kind:ActionKind;
+	operator_id:string;
+	row:int;
+	column:int;
+	facing:Facing;
+	scheduled_tick:ulong;
+}
+
+table EnemyAssessment {
+	enemy_instance_id:string (required);
+	spawned_tick:long = -1;
+	deadline_tick:long = -1;
+	max_hp_micros:long;
+	remaining_hp_micros:long;
+	credited_damage_micros:long;
+	death_tick:long = -1;
+	leaked_tick:long = -1;
+	deadline_margin_ticks:long;
+}
+
+table OperatorAssessment {
+	operator_id:string (required);
+	max_hp_micros:long;
+	remaining_hp_micros:long;
+	deployed_tick:long = -1;
+	death_tick:long = -1;
+}
+
+table UnsupportedMechanic {
+	mechanic_id:string (required);
+	origin:string (required);
+}
+
+table StrategyArtifact {
+	schema_version:uint = 4;
+	data_revision:string (required);
+	mechanics_revision:string (required);
+	guide_sha256:[ubyte] (required);
+	guide_variant_id:string (required);
+	damage_status:DamageStatus;
+	battlefield_status:ExpectedStatus;
+	minimum_deadline_margin_ticks:long;
+	minimum_operator_hp_micros:long;
+	actions:[MaterializedAction] (required);
+	builds:[ExactBuild] (required);
+	enemies:[EnemyAssessment] (required);
+	operators:[OperatorAssessment] (required);
+	unsupported:[UnsupportedMechanic] (required);
+	trace_sha256:[ubyte] (required);
+}
+
+root_type StrategyArtifact;
