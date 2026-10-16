@@ -1,6 +1,6 @@
 [package]
 name = "ark-battle-runtime"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
@@ -10,8 +10,8 @@ include = ["Cargo.toml", "build.rs", "README.md", "src/**", "unity/**", "example
 description = "Execute MAA jobs with the original battle implementation in an owned Unity Player."
 
 [dependencies]
-ark-unity = { version = "0.0.1", path = "../ark_unity" }
-ark-battle-runtime-probe = { version = "0.0.1", path = "../battle_runtime_probe" }
+ark-unity = { version = "0.0.2", path = "../ark_unity" }
+ark-battle-runtime-probe = { version = "0.0.2", path = "../battle_runtime_probe" }
 anyhow = "1"
 serde_json = "1"
 sha2 = "0.10"

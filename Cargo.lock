@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "ark-battle-runtime"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "ark-battle-runtime-probe",
@@ -123,11 +123,11 @@ dependencies = [
 
 [[package]]
 name = "ark-battle-runtime-probe"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "ark-solver"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "ark-unity"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "arknights-cli"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "ark-battle-runtime",
