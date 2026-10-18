@@ -78,16 +78,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Packaged source verification failed' }
           cargo build --locked -p arknights-cli --release
           if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
-      - name: Embed third-party tools and the prebuilt probe (Windows)
+      - name: Embed the type tree data and the prebuilt probe (Windows)
         if: runner.os == 'Windows'
         run: |
           # Pinned upstream wheels; the files inside are checked again by ark-battle-runtime.
           $bundle = Join-Path $env:RUNNER_TEMP 'tool-bundle'
           New-Item -ItemType Directory -Path $bundle | Out-Null
           $wheels = @(
-            @{ Url = 'https://files.pythonhosted.org/packages/ed/bc/f911995cae93fa8fd882a677f6bc304965db6f066bbabdee6e761762d512/typetreegeneratorapi-0.0.10-cp36-abi3-win_amd64.whl'
-               Sha256 = 'e96003e973c8d52d221b4ae50f377bcaf7538f2098e437d5383a1b7f13fa72ba'
-               Members = @('TypeTreeGeneratorAPI/TypeTreeGeneratorAPI.dll', 'TypeTreeGeneratorAPI/capstone.dll') },
             @{ Url = 'https://files.pythonhosted.org/packages/5a/ff/916b14f08ebbf4ee30a29e4b5bec592ed62dc0c0b9276a95f903a1da102c/unitypy-1.25.4-cp312-cp312-win_amd64.whl'
                Sha256 = '5e3f6fa44e23e7fc52a32f128d709a97901e0d10e3d87e0b602c5f5a58e3a4ef'
                Members = @('UnityPy/resources/lzma.tpk') }

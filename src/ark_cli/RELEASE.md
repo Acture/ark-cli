@@ -19,10 +19,9 @@ working directory. Edit the bundled config or supply `ROGUE_CONFIG` for your loc
 The executable can run outside its source checkout. The probe sources and Unity template
 are embedded in the executable. Original battles require Windows x64 and a user-owned official
 client; run `ark-cli battle setup`, then `ark-cli battle run JOB.json`. The Windows release also
-embeds the third-party TypeTreeGeneratorAPI, Capstone and TPK files and a prebuilt probe (notices in
-`THIRD_PARTY.md`), and `setup` downloads the prebuilt owned Player from this project's GitHub
-Release. Other builds download the pinned third-party wheels during `setup` and compile the probe,
-which needs Rust and a Windows SDK. Building the owned Player locally (`setup --build-player`)
+embeds UnityPy's type tree data and a prebuilt probe (notices in `THIRD_PARTY.md`), and `setup`
+downloads the prebuilt owned Player from this project's GitHub Release. Other builds download the
+pinned UnityPy wheel during `setup` and compile the probe, which needs Rust and a Windows SDK. Building the owned Player locally (`setup --build-player`)
 needs Unity 2021.3.39f1, a valid Unity license, the IL2CPP module and MSVC.
 
 Legacy Android/operator extraction also requires an independently configured ArkUnpacker
@@ -55,7 +54,8 @@ bash src/ark_cli/tools/package.sh --skip-build --debug
 ```
 
 On Windows, invoke the PowerShell packaging script. The release workflow first assembles the tool
-bundle (pinned wheels plus `ark-cli battle build-probe`) and builds with `bundled-tools`:
+bundle (the pinned UnityPy wheel plus `ark-cli battle build-probe`) and builds with
+`bundled-tools`:
 
 ```powershell
 ./src/ark_cli/tools/package.ps1

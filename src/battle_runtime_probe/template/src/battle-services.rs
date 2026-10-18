@@ -435,48 +435,99 @@ unsafe fn load_services(
 	Ok(())
 }
 
-unsafe fn static_reference(
-	module: Pointer,
-	class: Pointer,
-	name: &[u8],
-) -> Result<Pointer, &'static str> {
-	let class_init = level_bind!(
+// Set xLua hotfix bridges in an image. Setting a static field initializes its class, so classes
+// never initialized hold none and are skipped. Values are read from the classes' static data:
+// the runtime's static getter would wait on a class whose static constructor is still running.
+unsafe fn registered_hotfix_bridges(module: Pointer, image: Pointer) -> Result<u32, &'static str> {
+	let class_count = level_bind!(
 		module,
-		b"il2cpp_runtime_class_init\0",
-		unsafe extern "C" fn(Pointer)
+		b"il2cpp_image_get_class_count\0",
+		unsafe extern "C" fn(Pointer) -> usize
 	);
-	let field = level_bind!(
+	let class_at = level_bind!(
 		module,
-		b"il2cpp_class_get_field_from_name\0",
-		unsafe extern "C" fn(Pointer, *const c_char) -> Pointer
+		b"il2cpp_image_get_class\0",
+		unsafe extern "C" fn(Pointer, usize) -> Pointer
 	);
-	let static_get = level_bind!(
+	let initialized = level_bind!(
 		module,
-		b"il2cpp_field_static_get_value\0",
-		unsafe extern "C" fn(Pointer, Pointer)
+		b"il2cpp_class_is_inited\0",
+		unsafe extern "C" fn(Pointer) -> bool
 	);
-	class_init(class);
-	let handle: Pointer = field(class, name.as_ptr().cast());
-	if handle.is_null() {
-		return Err("static_field_missing");
+	let fields = level_bind!(
+		module,
+		b"il2cpp_class_get_fields\0",
+		unsafe extern "C" fn(Pointer, *mut Pointer) -> Pointer
+	);
+	let field_name = level_bind!(
+		module,
+		b"il2cpp_field_get_name\0",
+		unsafe extern "C" fn(Pointer) -> *const c_char
+	);
+	let field_flags = level_bind!(
+		module,
+		b"il2cpp_field_get_flags\0",
+		unsafe extern "C" fn(Pointer) -> i32
+	);
+	let static_data = level_bind!(
+		module,
+		b"il2cpp_class_get_static_field_data\0",
+		unsafe extern "C" fn(Pointer) -> Pointer
+	);
+	let field_offset = level_bind!(
+		module,
+		b"il2cpp_field_get_offset\0",
+		unsafe extern "C" fn(Pointer) -> isize
+	);
+	let mut bridges: u32 = 0;
+	for index in 0..class_count(image) {
+		let class: Pointer = class_at(image, index);
+		if class.is_null() || !initialized(class) {
+			continue;
+		}
+		let data: Pointer = static_data(class);
+		if data.is_null() {
+			continue;
+		}
+		let mut iterator: Pointer = core::ptr::null_mut();
+		loop {
+			let field: Pointer = fields(class, &mut iterator);
+			if field.is_null() {
+				break;
+			}
+			if field_flags(field) & 0x10 == 0 || !c_name_matches(field_name(field), b"__Hotfix") {
+				continue;
+			}
+			// Thread-static fields have no offset in the shared static data.
+			let offset: isize = field_offset(field);
+			if offset >= 0
+				&& !data
+					.cast::<u8>()
+					.offset(offset)
+					.cast::<Pointer>()
+					.read_unaligned()
+					.is_null()
+			{
+				bridges += 1;
+			}
+		}
 	}
-	let mut value: Pointer = core::ptr::null_mut();
-	static_get(handle, (&mut value as *mut Pointer).cast());
-	Ok(value)
+	Ok(bridges)
 }
 
 // The client's code hotfixes: the original LuaManager creates the xLua environment and runs the
 // entry script through the original decrypter and resource routes; the entry registers every
-// defined hotfix. The Scheduler fix's bridge field proves registration.
+// defined hotfix. Each registration sets an xLua `__Hotfix` bridge field on its class, so set
+// bridges across the game assembly prove registration whichever fixes this client defines.
 unsafe fn load_original_lua(api: &Api, domain: Pointer) -> Result<(), &'static str> {
 	let module: Pointer = GetModuleHandleW(ASSEMBLY.as_ptr());
 	let game: Pointer = (api.image)((api.assembly)(domain, b"Assembly-CSharp\0".as_ptr().cast()));
 	let manager: Pointer = api.class_named(game, b"Torappu.Lua\0", b"LuaManager\0")?;
 	api.call(manager, core::ptr::null_mut(), b"InitIfNot\0", &mut [])?;
 	record("original_lua_environment_initialized");
-	let scheduler: Pointer = api.class_named(game, b"Torappu.Battle\0", b"Scheduler\0")?;
-	let bridge: &[u8] = b"__Hotfix0_CheckActionEnabled\0";
-	if static_reference(module, scheduler, bridge)?.is_null() {
+	let bridges: u32 = registered_hotfix_bridges(module, game)?;
+	scene_number("original_lua_hotfix_bridges", bridges);
+	if bridges == 0 {
 		return Err("original_lua_hotfix_not_registered");
 	}
 	record("original_lua_hotfixes_registered");
@@ -1390,7 +1441,14 @@ unsafe fn create_battle_input(
 		api.class_named(game, b"Torappu.Battle\0", b"BattlePlayerData\0")?;
 	let converter: Pointer =
 		api.class_named(game, b"Torappu.Battle\0", b"BattleDataConverter\0")?;
-	let mut difficulty: i32 = 1;
+	// Original LevelData.Difficulty: NORMAL 1, or FOUR_STAR 2 for the challenge mode. The
+	// converter takes the level's predefined cards for it; the battle applies its runes.
+	let selected: i32 = match environment_digits(b"ARK_RUNTIME_DIFFICULTY") {
+		None | Some(1) => 1,
+		Some(2) => 2,
+		Some(_) => return Err("battle_difficulty_invalid"),
+	};
+	let mut difficulty: i32 = selected;
 	let mut side: i32 = 0;
 	let custom: bool = environment_flag(b"ARK_RUNTIME_CUSTOM_SQUAD");
 	let squad: Option<(Pointer, Rooted)> = if custom {
@@ -1448,7 +1506,7 @@ unsafe fn create_battle_input(
 		}
 		set_object(boxed, item, value);
 	}
-	let mut difficulty: i32 = 1; // Original LevelData.Difficulty.NORMAL.
+	let mut difficulty: i32 = selected;
 	let item: Pointer = field(input_class, b"difficulty\0".as_ptr().cast());
 	if item.is_null() {
 		return Err("battle_input_difficulty_field_missing");

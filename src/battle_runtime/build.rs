@@ -51,13 +51,7 @@ fn table(name: &str, base: &Path, paths: &[PathBuf]) -> String {
 /// `ARK_BATTLE_RUNTIME_BUNDLE_DIR`; every other build embeds none and downloads or compiles
 /// instead.
 fn tool_bundle() -> String {
-	const FILES: [&str; 5] = [
-		"TypeTreeGeneratorAPI.dll",
-		"capstone.dll",
-		"lzma.tpk",
-		"ArkBattleProbe.dll",
-		"probe-source-digest.txt",
-	];
+	const FILES: [&str; 3] = ["lzma.tpk", "ArkBattleProbe.dll", "probe-source-digest.txt"];
 	println!("cargo:rerun-if-env-changed=ARK_BATTLE_RUNTIME_BUNDLE_DIR");
 	if env::var_os("CARGO_FEATURE_BUNDLED_TOOLS").is_none() {
 		return "pub const TOOL_BUNDLE: &[(&str, &[u8])] = &[];

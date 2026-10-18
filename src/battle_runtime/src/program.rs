@@ -114,6 +114,7 @@ pub(crate) fn as_job(program: &Value) -> Result<Value> {
 			"schema",
 			"minimum_required",
 			"stage_name",
+			"difficulty",
 			"opers",
 			"groups",
 			"steps",
@@ -161,7 +162,7 @@ pub(crate) fn as_job(program: &Value) -> Result<Value> {
 			.unwrap_or(json!("v4.0.0")),
 	);
 	job.insert("stage_name".to_owned(), program["stage_name"].clone());
-	for key in ["opers", "groups", "doc"] {
+	for key in ["difficulty", "opers", "groups", "doc"] {
 		if let Some(value) = program.get(key) {
 			job.insert(key.to_owned(), value.clone());
 		}
@@ -266,7 +267,14 @@ pub(crate) fn from_maa(job: &Value) -> Result<Value> {
 	}
 	let mut program: Map<String, Value> = Map::new();
 	program.insert("schema".to_owned(), json!(SCHEMA));
-	for key in ["minimum_required", "stage_name", "opers", "groups", "doc"] {
+	for key in [
+		"minimum_required",
+		"stage_name",
+		"difficulty",
+		"opers",
+		"groups",
+		"doc",
+	] {
 		if let Some(value) = job.get(key) {
 			program.insert(key.to_owned(), value.clone());
 		}
@@ -331,7 +339,7 @@ pub(crate) fn to_maa(program: &Value) -> Result<std::result::Result<Value, Vec<S
 			.cloned()
 			.unwrap_or(json!("v4.0.0")),
 	);
-	for key in ["stage_name", "opers", "groups", "doc"] {
+	for key in ["stage_name", "difficulty", "opers", "groups", "doc"] {
 		if let Some(value) = program.get(key) {
 			job.insert(key.to_owned(), value.clone());
 		}

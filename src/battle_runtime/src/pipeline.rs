@@ -2,7 +2,7 @@ use crate::{
 	comparison,
 	environment::RuntimeConfig,
 	maa, probe, program,
-	runtime::{self, Battle, Presentation, Request},
+	runtime::{self, Battle, Difficulty, Presentation, Request},
 	squad::{self, SquadTraining, Training},
 };
 use anyhow::{ensure, Context, Result};
@@ -44,6 +44,8 @@ pub struct RunOptions {
 	pub time_scale: u32,
 	/// Ticks every unit operation waits after its conditions are met: a declared latency.
 	pub delay: u32,
+	/// The difficulty to run; by default normal when the job allows it, else the challenge.
+	pub difficulty: Option<Difficulty>,
 }
 impl Default for RunOptions {
 	fn default() -> Self {
@@ -58,6 +60,7 @@ impl Default for RunOptions {
 			speed: 1,
 			time_scale: 1,
 			delay: 0,
+			difficulty: None,
 		}
 	}
 }
@@ -173,10 +176,89 @@ impl BattleRuntime {
 			json!({"probe": output.join("ArkBattleProbe.dll"), "source_digest": probe::source_digest()}),
 		)
 	}
+	/// The original runtime metadata of the script classes whose field descriptions services
+	/// generate, exported once per client code by the probe in the owned Player.
+	fn script_reflection(&self, catalog: &Catalog) -> Result<PathBuf> {
+		let requests: Vec<String> = catalog.script_requests()?;
+		let text: String = requests.join(
+			"
+",
+		) + "
+";
+		let key_source = json!({"requests":format!("{:x}", Sha256::digest(text.as_bytes())),"runtime":runtime::inventory(&self.config,false)?,"player":io::sha256_file(&self.current_player()?)?,"revision":runtime::source_revision()?});
+		let key = format!("{:x}", Sha256::digest(serde_json::to_vec(&key_source)?));
+		let directory: PathBuf = self.config.state.join("reflection");
+		let cached: PathBuf = directory.join(format!("{}.jsonl", &key[..24]));
+		if cached.is_file() {
+			return Ok(cached);
+		}
+		fs::create_dir_all(&directory)?;
+		let request_path: PathBuf = directory.join(format!("{}-requests.txt", &key[..24]));
+		fs::write(&request_path, &text)?;
+		eprintln!(
+			"INFO ark_battle_runtime: exporting {} script classes from the original runtime metadata",
+			requests.len()
+		);
+		let mut request = Request::control(probe::build(&self.config)?, self.current_player()?);
+		request.reflection = Some(request_path);
+		let (output, result) = runtime::run(&self.config, &request)?;
+		ensure!(
+			result["passed"] == true && result["reflection_exported"] == true,
+			"Original runtime metadata export failed: {}",
+			output.display()
+		);
+		fs::copy(io::verify_pin(&result["reflection"])?, &cached)?;
+		Ok(cached)
+	}
+	/// The original level's inputs and its decoding by the original LevelData, cached per level.
+	fn decode_level(&self, catalog: &Catalog, level_id: &str) -> Result<(PathBuf, Value)> {
+		let build_record = self.current_player()?;
+		let key_source = json!({"catalog":catalog.provenance(),"level":level_id,"player":io::sha256_file(&build_record)?,"revision":runtime::source_revision()?});
+		let key = format!("{:x}", Sha256::digest(serde_json::to_vec(&key_source)?));
+		let cache = self
+			.config
+			.state
+			.join("decoded")
+			.join(format!("{}.json", &key[..24]));
+		if cache.is_file() {
+			let cached: Value = io::read_json(&cache)?;
+			let level: PathBuf = PathBuf::from(
+				cached["level"]
+					.as_str()
+					.context("Invalid decoded level cache")?,
+			);
+			if level.is_file() && cached["level_sha256"] == io::sha256_file(&level)? {
+				return Ok((level, cached["decoded"].clone()));
+			}
+		}
+		eprintln!("INFO ark_battle_runtime: decoding original level {level_id}");
+		let level = catalog.prepare_level(level_id)?;
+		let mut request = Request::control(probe::build(&self.config)?, build_record);
+		request.level = Some(level.clone());
+		request.deadline = 10;
+		let (decode_run, decoded) = runtime::run(&self.config, &request)?;
+		ensure!(
+			decoded["passed"] == true,
+			"Original level decode failed: {}",
+			decode_run.display()
+		);
+		let decoded: Value = io::read_json(Path::new(
+			decoded["decoded_level"]["path"]
+				.as_str()
+				.context("Decoded level missing")?,
+		))?;
+		fs::create_dir_all(cache.parent().unwrap())?;
+		io::write_json(
+			&cache,
+			&json!({"key_source":key_source,"level":level,"level_sha256":io::sha256_file(&level)?,"decoded":decoded}),
+		)?;
+		Ok((level, decoded))
+	}
 	fn prepare(
 		&self,
 		catalog: &Catalog,
 		level_id: &str,
+		(level, decoded): (&Path, &Value),
 		squad: &Value,
 		extra: &[String],
 	) -> Result<Prepared> {
@@ -223,36 +305,23 @@ impl BattleRuntime {
 				});
 			}
 		}
+		let reflection: PathBuf = self.script_reflection(catalog)?;
 		eprintln!("INFO ark_battle_runtime: preparing original level {level_id}");
-		let level = catalog.prepare_level(level_id)?;
-		let mut request = Request::control(probe::build(&self.config)?, build_record.clone());
-		request.level = Some(level.clone());
-		request.deadline = 10;
-		let (decode_run, decoded) = runtime::run(&self.config, &request)?;
-		ensure!(
-			decoded["passed"] == true,
-			"Original level decode failed: {}",
-			decode_run.display()
-		);
-		let decoded: Value = io::read_json(Path::new(
-			decoded["decoded_level"]["path"]
-				.as_str()
-				.context("Decoded level missing")?,
-		))?;
 		let (scene, services, plan) = catalog.prepare_scene_services(
 			&build::verified_player(&build_record)?,
-			&level,
-			&decoded,
+			level,
+			decoded,
 			squad,
 			extra,
+			&reflection,
 		)?;
 		fs::create_dir_all(cache.parent().unwrap())?;
 		io::write_json(
 			&cache,
-			&json!({"key_source":key_source,"level":level,"scene":scene,"services":services,"plan":plan,"hashes":{"level":io::sha256_file(&level)?,"scene":io::sha256_file(&scene)?,"services":io::sha256_file(&services)?,"plan":io::sha256_file(&plan)?}}),
+			&json!({"key_source":key_source,"level":level,"scene":scene,"services":services,"plan":plan,"hashes":{"level":io::sha256_file(level)?,"scene":io::sha256_file(&scene)?,"services":io::sha256_file(&services)?,"plan":io::sha256_file(&plan)?}}),
 		)?;
 		Ok(Prepared {
-			level,
+			level: level.to_path_buf(),
 			scene,
 			services,
 			plan,
@@ -280,9 +349,12 @@ impl BattleRuntime {
 			return Ok(value);
 		}
 		// Only the table export uses a reference scene. Job execution resolves its own level.
+		let reference: &str = "obt/main/level_main_01-01";
+		let (level, decoded) = self.decode_level(catalog, reference)?;
 		let prepared = self.prepare(
 			catalog,
-			"obt/main/level_main_01-01",
+			reference,
+			(&level, &decoded),
 			&json!({"schema":"ark-battle-squad-v2","operators":[]}),
 			&[],
 		)?;
@@ -732,7 +804,19 @@ impl BattleRuntime {
 		let tables = self.tables(&catalog)?;
 		let stage = resolve_stage(&job["stage_name"], &tables["stages"], &catalog.assets)?;
 		let level_id = stage["level_id"].as_str().unwrap();
-		let mut plan = maa::translate(&job, &squad, &tables["characters"], &tables["modules"])?;
+		let difficulty: Difficulty = maa::difficulty(&job, options.difficulty)?;
+		ensure!(
+			difficulty == Difficulty::Normal || stage["challenge"] == true,
+			"Level {level_id} has no challenge mode"
+		);
+		let (level, decoded) = self.decode_level(&catalog, level_id)?;
+		let mut plan = maa::translate(
+			&job,
+			&squad,
+			&tables["characters"],
+			&tables["modules"],
+			&maa::level_cards(&decoded, difficulty),
+		)?;
 		if let Some(program) = program {
 			program::apply(&mut plan, program)?;
 		}
@@ -758,9 +842,10 @@ impl BattleRuntime {
 		}
 		for attempt in 1..=options.resource_rounds {
 			let extra_list: Vec<String> = extra.iter().cloned().collect();
-			let prepared = self.prepare(&catalog, level_id, &squad, &extra_list)?;
+			let prepared =
+				self.prepare(&catalog, level_id, (&level, &decoded), &squad, &extra_list)?;
 			let mut request = Request::control(probe::build(&self.config)?, self.current_player()?);
-			request.level = Some(prepared.level);
+			request.level = Some(prepared.level.clone());
 			request.scene = Some(prepared.scene.clone());
 			request.services = Some(prepared.services.clone());
 			request.lua_hotfix = options.lua_hotfix;
@@ -774,6 +859,7 @@ impl BattleRuntime {
 				presentation: options.presentation,
 				speed: options.speed,
 				time_scale: options.time_scale,
+				difficulty,
 			});
 			request.notes = json!({"plan":prepared.plan,"attempt":attempt});
 			let (output, result) = runtime::run(&self.config, &request)?;
@@ -794,6 +880,9 @@ impl BattleRuntime {
 			report["job_result"] = result["job_result"].clone();
 			report["battle_events"] = crate::events::summarize(&output.join("run/observer.jsonl"))?;
 			report["delay_ticks"] = json!(options.delay);
+			report["resource_signature"] =
+				resource_signature(&prepared, &runtime::inventory(&self.config, false)?)?;
+			report["difficulty"] = json!(difficulty.name());
 			report["step_ticks"] = step_ticks(&output.join("run/observer.jsonl"))?;
 			if result["battle_outcome"]["terminal_verified"] == true {
 				io::write_json(
@@ -816,14 +905,21 @@ impl BattleRuntime {
 				);
 				let completed: usize =
 					result["completed_action_count"].as_u64().unwrap_or(0) as usize;
-				let concrete: Value =
-					maa::concrete_job(&job, &plan, &squad, &tables["modules"], completed, &note)?;
+				let concrete: Value = maa::concrete_job(
+					&job,
+					&plan,
+					&squad,
+					&tables["modules"],
+					difficulty,
+					completed,
+					&note,
+				)?;
 				// A program stays a program: its operators take the trained requirements and its
 				// steps end at the last completed one.
 				let (name, concrete): (&str, Value) = match program {
 					Some(program) => {
 						let mut concrete_program: Value = program.clone();
-						for key in ["opers", "groups", "doc"] {
+						for key in ["opers", "groups", "difficulty", "doc"] {
 							if let Some(value) = concrete.get(key) {
 								concrete_program[key] = value.clone();
 							}
@@ -911,7 +1007,18 @@ fn resolve_stage(
 	);
 	let (level, mut ids) = candidates.into_iter().next().unwrap();
 	ids.sort();
-	Ok(json!({"level_id":level,"stage_ids":ids.join(",")}))
+	// The challenge mode is the level's original FOUR_STAR stage, such as main_07-16#f#.
+	let challenge: bool = table["stages"]
+		.as_object()
+		.into_iter()
+		.flatten()
+		.any(|(_, stage)| {
+			stage["difficulty"] == "FOUR_STAR"
+				&& stage["levelId"]
+					.as_str()
+					.is_some_and(|id| id.eq_ignore_ascii_case(&level))
+		});
+	Ok(json!({"level_id":level,"stage_ids":ids.join(","),"challenge":challenge}))
 }
 
 fn observed_requests(log: &str) -> BTreeSet<String> {
@@ -928,6 +1035,63 @@ fn observed_requests(log: &str) -> BTreeSet<String> {
 		})
 		.collect()
 }
+/// One SHA-256 over every original client file a run used: scene bundles, service files and
+/// tables, the level and the client code. Equal signatures mean equal original inputs, whatever
+/// version the client's resource list names.
+fn resource_signature(prepared: &Prepared, client_code: &Value) -> Result<Value> {
+	let hash = |value: &Value, key: &str| -> Result<String> {
+		Ok(value[key]
+			.as_str()
+			.with_context(|| format!("Resource record lacks {key}"))?
+			.to_owned())
+	};
+	let mut files: BTreeMap<String, String> = BTreeMap::new();
+	let scene: Value = io::read_json(&prepared.scene)?;
+	for bundle in scene["bundles"]
+		.as_array()
+		.context("Scene bundles missing")?
+	{
+		files.insert(
+			format!("bundle:{}", hash(bundle, "bundle")?),
+			hash(bundle, "source_sha256")?,
+		);
+	}
+	let services: Value = io::read_json(&prepared.services)?;
+	for file in services["files"]
+		.as_array()
+		.context("Service files missing")?
+	{
+		if file.get("source_sha256").is_some() {
+			files.insert(
+				format!("file:{}", hash(file, "name")?),
+				hash(file, "source_sha256")?,
+			);
+		}
+	}
+	for table in services["tables"]
+		.as_array()
+		.context("Service tables missing")?
+	{
+		let source: &Value = &table["source"];
+		files.insert(
+			format!("table:{}", hash(source, "bundle")?),
+			io::sha256_file(Path::new(&hash(source, "path")?))?,
+		);
+	}
+	files.insert(
+		"level".to_owned(),
+		hash(&io::read_json(&prepared.level)?, "level_sha256")?,
+	);
+	for (name, file) in client_code
+		.as_object()
+		.context("Client code inventory missing")?
+	{
+		files.insert(format!("code:{name}"), hash(file, "sha256")?);
+	}
+	let digest: String = format!("{:x}", Sha256::digest(serde_json::to_vec(&files)?));
+	Ok(json!({"sha256": digest, "files": files.len()}))
+}
+
 fn origins(scene: &Path, services: &Path) -> Result<Value> {
 	let mut counts = json!({});
 	for (label, path, key) in [
@@ -1143,10 +1307,15 @@ mod tests {
 			("gamedata/levels/a/level_foo".to_owned(), "a.ab".to_owned()),
 			("gamedata/levels/a/level_bar".to_owned(), "b.ab".to_owned()),
 		]);
-		let table = json!({"stages":{"some_original_id":{"code":"EV-3","levelId":"a/level_foo"}}});
+		let table = json!({"stages":{"some_original_id":{"code":"EV-3","levelId":"a/level_foo"},
+			"some_original_id#f#":{"code":"EV-3","levelId":"A/level_foo","difficulty":"FOUR_STAR"},
+			"other_id":{"code":"EV-4","levelId":"a/level_bar","difficulty":"NORMAL"}}});
+		let stage: Value = resolve_stage(&json!("ev-3"), &table, &assets).unwrap();
+		assert_eq!(stage["level_id"], "a/level_foo");
+		assert_eq!(stage["challenge"], true);
 		assert_eq!(
-			resolve_stage(&json!("ev-3"), &table, &assets).unwrap()["level_id"],
-			"a/level_foo"
+			resolve_stage(&json!("ev-4"), &table, &assets).unwrap()["challenge"],
+			false
 		);
 		assert!(resolve_stage(&json!("1-1"), &table, &assets).is_err());
 	}

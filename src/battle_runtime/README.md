@@ -41,9 +41,11 @@ ark-cli battle run path/to/job.json
 
 1. Find the client: `--client`, `ARK_PC_CLIENT`, the client a previous `setup` recorded, or the
    single Hypergryph Launcher default location (`<drive>:/[Program Files/]Hypergryph Launcher/games/Arknights`).
-2. Place TypeTreeGeneratorAPI 0.0.10, Capstone and UnityPy 1.25.4's `lzma.tpk` under
-   `STATE/tools` with pinned hashes: embedded in releases, otherwise downloaded from PyPI wheels.
-   Their licenses are in `licenses/THIRD_PARTY.md`, which setup copies beside them.
+2. Place UnityPy 1.25.4's `lzma.tpk` under `STATE/tools` with its pinned hash: embedded in
+   releases, otherwise downloaded from its PyPI wheel. Its license is in
+   `licenses/THIRD_PARTY.md`, which setup copies beside it. Stripped client scripts take their
+   field descriptions from the original runtime metadata, which the probe exports in the owned
+   Player.
 3. Place the probe: the release's prebuilt DLL when it matches the embedded probe sources,
    otherwise compiled locally.
 4. Install the owned Player: the pinned GitHub Release archive, `--player-zip` for a local copy of
@@ -74,6 +76,13 @@ ark-cli battle squad path/to/job.json my-squad.json --mastery 2
 | `--mastery` | 0..3 | Skill level 7 plus this specialization rank (elite 2 only) |
 | `--module` | 0..3 | Module level; the job's required type (χ γ α Δ β), else the first module |
 | `--trust` | `max`, 0..200 | Trust percent through the original favor frames: its battle phase (50 at 100%) for stats, its favor point for module unlocks |
+
+`--difficulty normal|challenge` chooses the original difficulty; by default a job runs normal
+when its `difficulty` allows it (0, 1 or 3) and the challenge mode (突袭) when it selects only that (2).
+The challenge starts the battle at the original FOUR_STAR difficulty, so the original level applies
+its own challenge runes (for example one life point and stronger enemies) and hard predefines; a
+level without a challenge stage rejects it. The report and the concrete job record the difficulty
+that ran.
 
 Job requirements stay floors: a lower option never generates training below what the job asks
 for, and a required module type that cannot unlock at the chosen training is an error. A module
@@ -157,7 +166,9 @@ Serialized object payloads must survive byte-identical roundtrips and independen
 Battle runs load the client's Lua code hotfixes by default, as the client does: the original
 `LuaManager` creates the xLua environment (the client's own `xlua.dll`), and the encrypted entry
 and hotfix scripts load through the original decrypter from the current, hot-update-first bundles.
-Registration is verified on the original `Scheduler` hotfix bridge before any battle code runs.
+Registration is verified before any battle code runs: each registered hotfix sets an xLua
+`__Hotfix` bridge on its class, and the probe counts the set bridges in the game assembly, so the
+check holds whichever fixes a client version defines.
 `run --no-lua-hotfix` skips them, to compare their effect on a battle.
 
 The probe calls original LoadGame, StartGame and ManualFrameTick and runs a battle program,
@@ -230,7 +241,11 @@ that ran, with the source job, squad, level and resource version in `doc`. MAA c
 
 Each MAA attempt writes `result.json`; the final attempt also writes `report.json` and, for a
 verified original terminal state, `battle-proof.json`. Control, level-decode and identity-export
-runs write `result.json`.
+runs write `result.json`. `report.json` signs its original inputs: `resource_signature` is one
+SHA-256 over every client file the run used (scene bundles, service files and tables, the level
+and the client code), so equal signatures mean equal original inputs; `catalog_version` is only
+the version the client's resource list names. The installed files are used as they are, including
+an older install-package copy of a file the client has not downloaded yet.
 Inputs include hashes of the entire effective Player, external resources, manifests, actions,
 squad, original runtime, source
 and Player executable. External execution files are checked again after the process exits.
@@ -255,7 +270,7 @@ interval and retry limits. Results are therefore those of ideal timing.
 | Deploy, Skill, Retreat | Deploy, press the skill button, retreat steps |
 | Skill on an active, suspendable skill | The press suspends the skill, as MAA's click does |
 | kills, costs, cost_changes, cooling | Conditions in MAA's order: cost_changes, kills, costs, cooling (exactly N cooling) |
-| Summon names (for example `“弦惊”`) | Undeclared action names resolve to one original token |
+| Device and summon names (for example `干扰地雷`, `“弦惊”`) | Undeclared action names resolve to a card the level deals at the running difficulty, else to one original summon token; their Deploy may take direction `None`, which faces up as the levels' own devices do |
 | Skill/Retreat with name and location | The named unit must stand on that tile when it acts |
 | SpeedUp | Original speed toggle verified |
 | SkillUsage, skill_usage 0/1/2 | Manual, automatic, or bounded automatic use with skill_times |
@@ -263,8 +278,9 @@ interval and retry limits. Results are therefore those of ideal timing.
 | Output | Accept doc/doc_color presentation fields; no battle effect |
 | opers, groups, requirements | Original names and explicit squad; one eligible member per group; module types match the original UniEquipDB |
 | stage_name | Unique original stage code, name, stageId or levelId in the current catalog |
+| difficulty | 0..3; normal unless the job selects only the challenge or `--difficulty` asks for it |
 
-Nonzero delays, finite timeouts, timers, camera/bullet-time actions, challenge mode, location-only
+Nonzero delays, finite timeouts, timers, camera/bullet-time actions, location-only
 Skill/Retreat without a name and skill_usage 3 are rejected. Presence in the catalog
 alone does not guarantee that a stage's runtime dependencies can be loaded.
 

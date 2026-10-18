@@ -31,6 +31,33 @@ pub(crate) struct Battle {
 	pub speed: u32,
 	/// Unity time scale of a presented battle (1, 2, 4, 8 or 16): game seconds per real second.
 	pub time_scale: u32,
+	pub difficulty: Difficulty,
+}
+
+/// The original difficulty a battle starts at; the original level applies its runes for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Difficulty {
+	#[default]
+	Normal,
+	/// The challenge mode (突袭), the original FOUR_STAR difficulty.
+	Challenge,
+}
+
+impl Difficulty {
+	/// The original `LevelData.Difficulty` value: NORMAL 1, FOUR_STAR 2.
+	pub(crate) fn original(self) -> u32 {
+		match self {
+			Self::Normal => 1,
+			Self::Challenge => 2,
+		}
+	}
+
+	pub(crate) fn name(self) -> &'static str {
+		match self {
+			Self::Normal => "normal",
+			Self::Challenge => "challenge",
+		}
+	}
 }
 
 /// How a battle is driven.
@@ -55,6 +82,9 @@ pub(crate) struct Request {
 	pub services: Option<PathBuf>,
 	pub battle: Option<Battle>,
 	pub export_identities: bool,
+	/// Script classes (`assembly|namespace|class` lines) whose field descriptions the original
+	/// runtime metadata exports for TypeTree generation.
+	pub reflection: Option<PathBuf>,
 	/// Load the client's original Lua code hotfixes after services, as the client does.
 	pub lua_hotfix: bool,
 	pub deadline: u64,
@@ -70,6 +100,7 @@ impl Request {
 			services: None,
 			battle: None,
 			export_identities: false,
+			reflection: None,
 			lua_hotfix: true,
 			deadline: 30,
 			notes: json!({}),
@@ -408,6 +439,17 @@ pub(crate) fn run(config: &RuntimeConfig, request: &Request) -> Result<(PathBuf,
 				services["table_list"]["path"].as_str().unwrap().to_owned(),
 			);
 		}
+		if let Some(requests) = &request.reflection {
+			set("ARK_RUNTIME_REFLECTION", "1".to_owned());
+			set(
+				"ARK_RUNTIME_REFLECTION_INPUT",
+				requests.to_string_lossy().into_owned(),
+			);
+			set(
+				"ARK_RUNTIME_REFLECTION_OUTPUT",
+				run.join("reflection.jsonl").to_string_lossy().into_owned(),
+			);
+		}
 		if request.export_identities {
 			set("ARK_RUNTIME_EXPORT_IDENTITIES", "1".to_owned());
 			set(
@@ -449,6 +491,10 @@ pub(crate) fn run(config: &RuntimeConfig, request: &Request) -> Result<(PathBuf,
 						.into_owned(),
 				),
 				("ARK_RUNTIME_BATTLE_SEED", battle.seed.to_string()),
+				(
+					"ARK_RUNTIME_DIFFICULTY",
+					battle.difficulty.original().to_string(),
+				),
 				(
 					"ARK_RUNTIME_BATTLE_LEVEL_ID",
 					services.as_ref().unwrap()["level_id"]
@@ -724,6 +770,15 @@ fn evaluate(
 		let hotfixes = stages.contains("original_lua_hotfixes_registered");
 		result["lua_hotfix"] = json!({"requested": requested, "registered": hotfixes});
 		passed &= hotfixes == requested;
+	}
+	if request.reflection.is_some() {
+		let path = run.join("reflection.jsonl");
+		let verified = path.is_file() && stages.contains("original_reflection_exported");
+		result["reflection_exported"] = json!(verified);
+		passed &= verified;
+		if verified {
+			result["reflection"] = io::pin(&path)?;
+		}
 	}
 	if request.export_identities {
 		let mut identities = json!({});

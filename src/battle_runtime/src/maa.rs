@@ -4,6 +4,8 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::runtime::Difficulty;
+
 pub(crate) const PROFILE: &str = "original-state-v3";
 pub(crate) fn integer(value: &Value, low: i64, high: i64, label: &str) -> Result<i64> {
 	let value = value
@@ -45,17 +47,69 @@ pub(crate) fn operators_by_name(identities: &Value) -> Result<BTreeMap<String, V
 	}
 	Ok(result)
 }
-/// Summons and devices deployed from cards an operator brings, named as in the original table.
-fn token_by_name(identities: &Value, name: &str) -> Result<Option<String>> {
-	let matches: Vec<&String> = identities
-		.as_object()
-		.context("Character identities not object")?
-		.iter()
-		.filter(|(id, record)| id.starts_with("token_") && record["name"].as_str() == Some(name))
-		.map(|(id, _)| id)
-		.collect();
+/// A deployed name that is no squad member, named as in the original table: a card the level
+/// deals (a device such as 干扰地雷), else a summon from a card an operator brings. Device names
+/// repeat across the table, so only the level's own cards are candidates for them.
+fn token_by_name(
+	identities: &Value,
+	level_cards: &BTreeSet<String>,
+	name: &str,
+) -> Result<Option<String>> {
+	let named = |id: &str| -> bool { identities[id]["name"].as_str() == Some(name) };
+	let mut matches: Vec<&String> = level_cards.iter().filter(|id| named(id)).collect();
+	if matches.is_empty() {
+		matches = identities
+			.as_object()
+			.context("Character identities not object")?
+			.keys()
+			.filter(|id| id.starts_with("token_") && named(id))
+			.collect();
+	}
 	ensure!(matches.len() <= 1, "Ambiguous original token name {name}");
 	Ok(matches.first().map(|id| (*id).clone()))
+}
+/// The cards the original level deals besides the squad; the challenge mode adds its own.
+pub(crate) fn level_cards(level: &Value, difficulty: Difficulty) -> BTreeSet<String> {
+	let mut groups: Vec<&Value> = vec![&level["predefines"]["tokenCards"]];
+	if difficulty == Difficulty::Challenge {
+		groups.push(&level["hardPredefines"]["tokenCards"]);
+	}
+	groups
+		.into_iter()
+		.filter_map(Value::as_array)
+		.flatten()
+		.filter_map(|card| card["inst"]["characterKey"].as_str())
+		.map(str::to_owned)
+		.collect()
+}
+/// The difficulty's bit in MAA's job mask.
+fn maa_bit(difficulty: Difficulty) -> i64 {
+	match difficulty {
+		Difficulty::Normal => 1,
+		Difficulty::Challenge => 2,
+	}
+}
+/// The difficulty a job runs at. MAA's mask selects normal 1, challenge 2, or either 3 (0 leaves
+/// it unspecified); a job that allows normal runs it unless the challenge is requested.
+pub(crate) fn difficulty(job: &Value, requested: Option<Difficulty>) -> Result<Difficulty> {
+	let mask: i64 = integer(
+		job.get("difficulty").unwrap_or(&json!(0)),
+		0,
+		3,
+		"difficulty",
+	)?;
+	let allows = |difficulty: Difficulty| -> bool { mask == 0 || mask & maa_bit(difficulty) != 0 };
+	let chosen: Difficulty = requested.unwrap_or(if allows(Difficulty::Normal) {
+		Difficulty::Normal
+	} else {
+		Difficulty::Challenge
+	});
+	ensure!(
+		allows(chosen),
+		"The job does not select the {} difficulty",
+		chosen.name()
+	);
+	Ok(chosen)
 }
 fn grid(location: &Value) -> Result<(i64, i64)> {
 	let location = location.as_array().context("Location must be [x,y]")?;
@@ -191,11 +245,14 @@ fn satisfies(actual: &Value, wanted: &BTreeMap<String, i64>, modules: &Value) ->
 			.is_some_and(|v| v + offset >= *wanted.get(*key).unwrap_or(&0))
 	})
 }
+/// Translate the job for its squad; `level_cards` are the cards the level deals at the
+/// difficulty that runs ([`level_cards`]).
 pub(crate) fn translate(
 	job: &Value,
 	squad: &Value,
 	identities: &Value,
 	modules: &Value,
+	level_cards: &BTreeSet<String>,
 ) -> Result<Value> {
 	crate::squad::compile(squad)?;
 	fields(
@@ -224,7 +281,7 @@ pub(crate) fn translate(
 	integer(
 		job.get("difficulty").unwrap_or(&json!(0)),
 		0,
-		1,
+		3,
 		"difficulty",
 	)?;
 	let by_name = operators_by_name(identities)?;
@@ -390,7 +447,7 @@ pub(crate) fn translate(
 			.context("Location-only Skill/Retreat unsupported; the action needs a name")?;
 		let target: String = match bindings.get(name) {
 			Some(id) => id.clone(),
-			None if kind != "skill_usage" => token_by_name(identities, name)?
+			None if kind != "skill_usage" => token_by_name(identities, level_cards, name)?
 				.with_context(|| format!("Action operator/group/token unresolved: {name}"))?,
 			None => bail!("SkillUsage targets an undeclared operator {name}"),
 		};
@@ -416,6 +473,10 @@ pub(crate) fn translate(
 				"Right" | "右" => "RIGHT",
 				"Down" | "下" => "DOWN",
 				"Left" | "左" => "LEFT",
+				// MAA chooses no direction for a device or summon; the original deploy still
+				// takes one, and the original levels place their own devices facing up.
+				"None" | "无" if !target.starts_with("char_") => "UP",
+				"None" | "无" => bail!("Operator {name} needs a deploy direction"),
 				_ => bail!("Unsupported direction"),
 			});
 		} else {
@@ -445,12 +506,14 @@ pub(crate) fn translate(
 }
 
 /// The job as the original engine established it: actions up to the last completed command,
-/// and each operator's requirements set to the explicit training that ran. MAA can execute it.
+/// each operator's requirements set to the explicit training that ran, and the difficulty it
+/// ran at. MAA can execute it.
 pub(crate) fn concrete_job(
 	job: &Value,
 	plan: &Value,
 	squad: &Value,
 	modules: &Value,
+	difficulty: Difficulty,
 	completed: usize,
 	note: &str,
 ) -> Result<Value> {
@@ -518,6 +581,7 @@ pub(crate) fn concrete_job(
 		}
 	}
 	concrete["actions"] = json!(actions[..kept]);
+	concrete["difficulty"] = json!(maa_bit(difficulty));
 	let title: &str = job["doc"]["title"].as_str().unwrap_or_default();
 	concrete["doc"] =
 		json!({"title": format!("{title} [ark-battle-runtime]").trim_start(), "details": note});
@@ -577,7 +641,7 @@ pub(crate) fn compile(plan: &Value, delay: u32) -> Result<String> {
 		policies.len() <= 12 && (1..=128).contains(&commands.len()),
 		"Probe capacity exceeded"
 	);
-	let identifier = Regex::new(r"^(?:char|token)_[A-Za-z0-9_]{1,75}$")?;
+	let identifier = Regex::new(r"^(?:char|token|trap)_[A-Za-z0-9_]{1,75}$")?;
 	let mut result = String::from("ARKP1\n");
 	if delay > 0 {
 		// Skill policies take the same latency: a skill must stay ready that long.
@@ -656,7 +720,7 @@ mod tests {
 	#[test]
 	fn ordered_conditions_coordinates_and_skill_policies_keep_wire_semantics() {
 		let (job, squad, identities) = fixture();
-		let plan = translate(&job, &squad, &identities, &json!({})).unwrap();
+		let plan = translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).unwrap();
 		assert_eq!(compile(&plan, 0).unwrap(),"ARKP1\nS|2|3|char_fixture_a\nT|0|3|4|3|0|0|0|2|3|-5|4|2|char_fixture_a\nT|5|0|0|0|0|1|0|0|char_fixture_a\nT|4|0|0|0|0|0|0|0|_\n");
 	}
 	#[test]
@@ -675,7 +739,7 @@ mod tests {
 			let (mut job, squad, identities) = fixture();
 			job["actions"][0][key] = value;
 			assert!(
-				translate(&job, &squad, &identities, &json!({})).is_err(),
+				translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_err(),
 				"{key}"
 			);
 		}
@@ -689,7 +753,7 @@ mod tests {
 			let (mut job, squad, identities) = fixture();
 			job["actions"][0]["type"] = json!(kind);
 			assert!(
-				translate(&job, &squad, &identities, &json!({})).is_err(),
+				translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_err(),
 				"{kind}"
 			);
 		}
@@ -698,19 +762,19 @@ mod tests {
 	fn explicit_squad_training_and_group_ambiguity_are_enforced() {
 		let (mut job, squad, identities) = fixture();
 		job["opers"][0]["requirements"] = json!({"elite":1,"level":61});
-		assert!(translate(&job, &squad, &identities, &json!({})).is_err());
+		assert!(translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_err());
 		job["opers"][0]["requirements"]["level"] = json!(60);
-		assert!(translate(&job, &squad, &identities, &json!({})).is_ok());
+		assert!(translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_ok());
 		job["opers"][0]["skill"] = json!(2);
-		assert!(translate(&job, &squad, &identities, &json!({})).is_err());
+		assert!(translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_err());
 		let (mut job, mut squad, identities) = fixture();
 		job["opers"] = json!([]);
 		job["groups"] = json!([{"name":"甲","opers":[{"name":"甲"},{"name":"乙"}]}]);
-		assert!(translate(&job, &squad, &identities, &json!({})).is_ok());
+		assert!(translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_ok());
 		let mut second = squad["operators"][0].clone();
 		second["character_id"] = json!("char_fixture_b");
 		squad["operators"].as_array_mut().unwrap().push(second);
-		assert!(translate(&job, &squad, &identities, &json!({})).is_err());
+		assert!(translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_err());
 	}
 	#[test]
 	fn tokens_resolve_by_original_name_and_located_actions_keep_their_tile() {
@@ -722,16 +786,16 @@ mod tests {
 			{"type":"Retreat","name":"召唤","location":[2,1]}
 		]);
 		let native = compile(
-			&translate(&job, &squad, &identities, &json!({})).unwrap(),
+			&translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).unwrap(),
 			0,
 		)
 		.unwrap();
 		assert!(native.contains("T|0|1|2|0|0|0|0|0|token_fixture_s"));
 		assert!(native.contains("T|2|3|4|0|0|0|1|0|char_fixture_a"));
 		job["actions"] = json!([{"type":"Skill","location":[4,3]}]);
-		assert!(translate(&job, &squad, &identities, &json!({})).is_err());
+		assert!(translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_err());
 		job["actions"] = json!([{"type":"Deploy","name":"未知","location":[1,1],"direction":"Up"}]);
-		assert!(translate(&job, &squad, &identities, &json!({})).is_err());
+		assert!(translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_err());
 	}
 	#[test]
 	fn module_type_requirements_match_the_equipped_original_module() {
@@ -739,21 +803,81 @@ mod tests {
 		let modules = json!({"equipDict":{"uniequip_002_a":{"typeName2":"X"},"uniequip_003_a":{"typeName2":"Y"}}});
 		job["opers"][0]["requirements"] = json!({"module":2});
 		assert!(
-			translate(&job, &squad, &identities, &modules).is_err(),
+			translate(&job, &squad, &identities, &modules, &BTreeSet::new()).is_err(),
 			"no module equipped"
 		);
 		squad["operators"][0]["modules"] = json!([{"key":"uniequip_002_a","level":3}]);
 		assert!(
-			translate(&job, &squad, &identities, &modules).is_err(),
+			translate(&job, &squad, &identities, &modules, &BTreeSet::new()).is_err(),
 			"X is not γ"
 		);
 		squad["operators"][0]["modules"] = json!([{"key":"uniequip_003_a","level":1}]);
-		assert!(translate(&job, &squad, &identities, &modules).is_ok());
+		assert!(translate(&job, &squad, &identities, &modules, &BTreeSet::new()).is_ok());
 		job["opers"][0]["requirements"] = json!({"module":0});
 		assert!(
-			translate(&job, &squad, &identities, &modules).is_err(),
+			translate(&job, &squad, &identities, &modules, &BTreeSet::new()).is_err(),
 			"job forbids modules"
 		);
+	}
+	#[test]
+	fn difficulty_runs_normal_unless_the_job_is_challenge_only_or_asks_for_it() {
+		let job = |mask: i64| json!({"difficulty": mask});
+		assert_eq!(difficulty(&json!({}), None).unwrap(), Difficulty::Normal);
+		assert_eq!(difficulty(&job(3), None).unwrap(), Difficulty::Normal);
+		assert_eq!(difficulty(&job(2), None).unwrap(), Difficulty::Challenge);
+		assert_eq!(
+			difficulty(&job(3), Some(Difficulty::Challenge)).unwrap(),
+			Difficulty::Challenge
+		);
+		assert_eq!(
+			difficulty(&job(0), Some(Difficulty::Challenge)).unwrap(),
+			Difficulty::Challenge
+		);
+		assert!(difficulty(&job(1), Some(Difficulty::Challenge)).is_err());
+		assert!(difficulty(&job(2), Some(Difficulty::Normal)).is_err());
+		assert!(difficulty(&job(4), None).is_err());
+	}
+	#[test]
+	fn level_cards_resolve_devices_the_level_deals_before_summons() {
+		let level = json!({
+			"predefines": {"tokenCards": [{"inst": {"characterKey": "trap_fixture_mine"}}]},
+			"hardPredefines": {"tokenCards": [{"inst": {"characterKey": "trap_fixture_wall"}}]}
+		});
+		let normal: BTreeSet<String> = level_cards(&level, Difficulty::Normal);
+		assert_eq!(normal, BTreeSet::from(["trap_fixture_mine".to_owned()]));
+		let challenge: BTreeSet<String> = level_cards(&level, Difficulty::Challenge);
+		assert!(challenge.contains("trap_fixture_mine") && challenge.contains("trap_fixture_wall"));
+		let (mut job, squad, mut identities) = fixture();
+		// The same device name elsewhere in the table never competes with the level's own card.
+		identities["trap_fixture_mine"] = json!({"name":"地雷"});
+		identities["trap_fixture_other_mine"] = json!({"name":"地雷"});
+		// A device takes no direction in MAA; the original deploy faces it up.
+		job["actions"] =
+			json!([{"type":"Deploy","name":"地雷","location":[2,1],"direction":"None"}]);
+		let plan: Value = translate(&job, &squad, &identities, &json!({}), &normal).unwrap();
+		assert!(compile(&plan, 0)
+			.unwrap()
+			.contains("T|0|1|2|0|0|0|0|0|trap_fixture_mine"));
+		assert!(translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).is_err());
+		job["actions"] = json!([{"type":"Deploy","name":"甲","location":[2,1],"direction":"None"}]);
+		assert!(translate(&job, &squad, &identities, &json!({}), &normal).is_err());
+	}
+	#[test]
+	fn concrete_jobs_record_the_difficulty_that_ran() {
+		let (job, squad, identities) = fixture();
+		let plan: Value =
+			translate(&job, &squad, &identities, &json!({}), &BTreeSet::new()).unwrap();
+		let concrete: Value = concrete_job(
+			&job,
+			&plan,
+			&squad,
+			&json!({}),
+			Difficulty::Challenge,
+			3,
+			"",
+		)
+		.unwrap();
+		assert_eq!(concrete["difficulty"], 2);
 	}
 	#[test]
 	fn policies_are_not_ordered_commands() {

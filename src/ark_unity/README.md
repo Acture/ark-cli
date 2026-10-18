@@ -4,7 +4,7 @@
 It is used by [`ark-battle-runtime`](../battle_runtime/README.md), with no dependency on Ark Solver's
 battle model and no Python worker.
 
-- `assets`: V077 manifests, hot-update routing and MD5 verification; UnityFS/LZ4AK; SerializedFile
+- `assets`: V078 manifests and hot-update routing over the installed files; UnityFS/LZ4AK; SerializedFile
   parsing, byte-preserving cloning, TypeTree restoration, CAB closure and original service settings.
 - `build`: official Unity CLI, license and toolchain checks, Editor build invocation, complete
   owned Player inventory verification.
@@ -18,18 +18,18 @@ notice is in `src/assets/ARK_UNPACKER_LICENSE.txt`.
 
 ## Local native metadata inputs
 
-Stripped original IL2CPP types require two upstream tooling inputs. Both stay outside source
-control; neither needs a Python interpreter at runtime:
+Stripped original types take their field descriptions from two inputs, neither of which needs a
+Python interpreter at runtime:
 
-- TypeTreeGeneratorAPI 0.0.10 native Windows library and its `capstone.dll` dependency. Place them
-  in `STATE/tools/typetreegenerator-0.0.10/`, or set `ARK_TYPE_TREE_GENERATOR` to the API DLL.
-- Same-version Unity release TypeTree data, such as UnityPy 1.25.4's `lzma.tpk`. Place it at
-  `STATE/tools/unitypy-1.25.4/lzma.tpk`, or set `ARK_UNITY_TPK` to the file.
+- Script classes: the original runtime IL2CPP metadata, exported by the battle runtime's probe in
+  the owned Player (one JSON object per class). Fields follow Unity's MonoBehaviour serialization
+  rules, so the client's protected binary is never read statically.
+- Engine classes: same-version Unity release TypeTree data, such as UnityPy 1.25.4's `lzma.tpk`.
+  Place it at `STATE/tools/unitypy-1.25.4/lzma.tpk`, or set `ARK_UNITY_TPK` to the file.
 
-These are read directly through the native ABI and Rust TPK decoder. Their bytes, original
-GameAssembly and metadata hashes are recorded as provenance. Native generated descriptions and
-release descriptions are admitted only after every original object roundtrips byte-identically.
-Keep the upstream licenses with local distributions of these dependencies.
+The export and TPK bytes are recorded as provenance. Generated and release descriptions are
+admitted only after every original object roundtrips byte-identically. Keep the upstream license
+with local distributions of the TPK data.
 
 ## Validation
 

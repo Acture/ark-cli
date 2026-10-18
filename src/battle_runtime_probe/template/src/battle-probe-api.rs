@@ -1,7 +1,7 @@
 //! Opt-in Unity engine calls from the native preload callback's own message thread.
 use super::{
-	elapsed_ms, record, GetCurrentThreadId, GetEnvironmentVariableW, GetModuleHandleW, Line,
-	WriteFile, ASSEMBLY, CALLBACKS, LOG, STATUS,
+	elapsed_ms, record, CloseHandle, CreateFileW, GetCurrentThreadId, GetEnvironmentVariableW,
+	GetModuleHandleW, Line, WriteFile, ASSEMBLY, CALLBACKS, LOG, STATUS,
 };
 use core::ffi::{c_char, c_void};
 use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
@@ -317,6 +317,10 @@ unsafe fn probe() -> Result<(), &'static str> {
 			let instance: i32 = INSTANCE.load(Ordering::Acquire);
 			sample("engine_probe_complete", frame, instance, instance);
 			battle_component(&api, domain, image)?;
+			if environment_flag(b"ARK_RUNTIME_REFLECTION") {
+				export_reflection(&api, domain)?;
+				record("original_reflection_exported");
+			}
 			if environment_flag(b"ARK_RUNTIME_SERVICES") {
 				load_services(&api, domain, image)?;
 			}
@@ -450,3 +454,4 @@ include!("battle-scene.rs");
 include!("battle-services.rs");
 include!("battle-actions.rs");
 include!("battle-events.rs");
+include!("battle-reflection.rs");

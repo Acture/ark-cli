@@ -113,11 +113,40 @@ impl OwnedMap {
 	}
 }
 
+/// The client's MonoScripts by path ID, from the original script mapper.
+fn mapper_scripts(catalog: &Catalog) -> Result<BTreeMap<i64, Script>> {
+	let mapper: File = File::parse(&fs::read(catalog.data.join("globalgamemanagers.assets"))?)?;
+	mapper
+		.objects
+		.iter()
+		.filter(|obj| mapper.class(obj) == 115)
+		.map(|obj| Ok((obj.id, serialized::mono_script(&obj.raw)?)))
+		.collect()
+}
+
+pub(crate) fn script_requests(catalog: &Catalog) -> Result<Vec<String>> {
+	let scripts: BTreeMap<i64, Script> = mapper_scripts(catalog)?;
+	let file: File = File::parse(&fs::read(catalog.data.join("sharedassets1.assets"))?)?;
+	let mut requests: BTreeSet<String> = BTreeSet::new();
+	for obj in file.objects.iter().filter(|obj| file.class(obj) == 114) {
+		let (_, pointer, _) = serialized::mono_head(&obj.raw)?;
+		if let Some(script) = scripts.get(&pointer.1).filter(|_| pointer.0 == 1) {
+			let assembly: &str = script
+				.assembly
+				.strip_suffix(".dll")
+				.unwrap_or(&script.assembly);
+			requests.insert(format!("{assembly}|{}|{}", script.namespace, script.class));
+		}
+	}
+	Ok(requests.into_iter().collect())
+}
+
 pub(crate) fn prepare(
 	catalog: &Catalog,
 	player: &Path,
 	scene_inputs: &Path,
 	level_inputs: &Path,
+	reflection: &Path,
 ) -> Result<PathBuf> {
 	let started: Instant = Instant::now();
 	eprintln!("INFO Preparing original services and owned Resources map");
@@ -130,7 +159,7 @@ pub(crate) fn prepare(
 		"Scene or level resource provenance differs"
 	);
 	let output: PathBuf = stage(&catalog.state, "services")?;
-	let mut trees: Trees = Trees::new(catalog, &scene)?;
+	let trees: Trees = Trees::new(catalog, &scene, reflection)?;
 	let gm_source: PathBuf = player.join("ArkBattleRuntime_Data/globalgamemanagers");
 	let mut gm: File = File::parse(&fs::read(&gm_source)?)?;
 	trees.fill_builtins(&mut gm)?;
@@ -144,13 +173,7 @@ pub(crate) fn prepare(
 		output: output.clone(),
 		files: Vec::new(),
 	};
-	let mapper: File = File::parse(&fs::read(catalog.data.join("globalgamemanagers.assets"))?)?;
-	let scripts: BTreeMap<i64, Script> = mapper
-		.objects
-		.iter()
-		.filter(|obj| mapper.class(obj) == 115)
-		.map(|obj| Ok((obj.id, serialized::mono_script(&obj.raw)?)))
-		.collect::<Result<_>>()?;
+	let scripts: BTreeMap<i64, Script> = mapper_scripts(catalog)?;
 	for id in scripts.keys() {
 		owned.route(
 			&format!("arkbootstrap/scripts/{id}"),
@@ -167,7 +190,7 @@ pub(crate) fn prepare(
 		let source: PathBuf = catalog.data.join(original);
 		let mut file: File = File::parse(&fs::read(&source)?)?;
 		if original == "sharedassets1.assets" {
-			for mut entry in trees.restore(catalog, &mut file, &scripts)? {
+			for mut entry in trees.restore(&mut file, &scripts)? {
 				entry["file"] = json!(original);
 				descriptions.push(entry);
 			}
@@ -226,7 +249,7 @@ pub(crate) fn prepare(
 			owned.files.push(json!({"source": stream, "source_sha256": sha256(&fs::read(&stream)?), "path": target, "name": target.file_name().and_then(|s| s.to_str()).context("Stream filename missing")?, "sha256": sha256(&fs::read(&target)?)}));
 		}
 	}
-	route_xlua_resources(catalog, &mut owned, &mut trees)?;
+	route_xlua_resources(catalog, &mut owned, &trees)?;
 	let avg: Value = avg_service(catalog, &scripts, &prefabs)?;
 	for table in &mut tables {
 		route_table(catalog, &mut owned, table)?;
@@ -468,7 +491,7 @@ fn table_configuration(output: &Path, class: &str, raw: &[u8], mut item: Value) 
 
 /// xLua's own Lua helpers (`xlua/*`) that the client's Lua hotfix layer requires through
 /// `Resources.Load`. They live in the client's `resources.assets`, copied unchanged.
-fn route_xlua_resources(catalog: &Catalog, owned: &mut OwnedMap, trees: &mut Trees) -> Result<()> {
+fn route_xlua_resources(catalog: &Catalog, owned: &mut OwnedMap, trees: &Trees) -> Result<()> {
 	const RESOURCES: &str = "resources.assets";
 	let mut original: File = File::parse(&fs::read(catalog.data.join("globalgamemanagers"))?)?;
 	trees.fill_builtins(&mut original)?;

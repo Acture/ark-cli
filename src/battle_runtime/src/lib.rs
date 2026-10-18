@@ -16,5 +16,5 @@ mod tools;
 pub mod comparison;
 pub use environment::RuntimeConfig;
 pub use pipeline::{BattleRuntime, LadderSearch, PlayerSource, RunOptions, RunReport};
-pub use runtime::Presentation;
+pub use runtime::{Difficulty, Presentation};
 pub use squad::{SquadTraining, Training};

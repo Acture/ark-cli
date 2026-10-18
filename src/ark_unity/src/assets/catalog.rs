@@ -2,7 +2,6 @@ use super::bundle::{self, Reader};
 use super::serialized::{self, File, Object, Script};
 use super::{bounded_join, pin, read_json, sha256, stage, text, write_json};
 use anyhow::{ensure, Context, Result};
-use md5::{Digest, Md5};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -20,11 +19,9 @@ pub struct Catalog {
 	pub paths: BTreeMap<String, String>,
 	pub version_id: String,
 	pub(crate) state: PathBuf,
-	pub(crate) client: PathBuf,
 	pub(crate) data: PathBuf,
 	bundles: Vec<String>,
 	dependencies: Vec<Vec<usize>>,
-	entries: BTreeMap<String, Value>,
 	hot: PathBuf,
 	base: PathBuf,
 	provenance: Value,
@@ -54,7 +51,7 @@ impl Catalog {
 		let list_path: PathBuf = list_root.join("hot_update_list.json");
 		let listing: Value = read_json(&list_path)?;
 		ensure!(
-			text(&listing, "manifestVersion")? == "V077",
+			text(&listing, "manifestVersion")? == "V078",
 			"Unreviewed original manifest version"
 		);
 		let version_id: String = text(&listing, "versionId")?.to_owned();
@@ -65,31 +62,9 @@ impl Catalog {
 					.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.'),
 			"Unsafe manifest version identifier"
 		);
-		let mut entries: BTreeMap<String, Value> = BTreeMap::new();
-		for entry in listing["abInfos"]
-			.as_array()
-			.context("Missing resource-list records")?
-		{
-			let name: String = text(entry, "name")?.to_owned();
-			bounded_join(list_root, &name)?;
-			ensure!(
-				entries.insert(name, entry.clone()).is_none(),
-				"Duplicate resource-list name"
-			);
-		}
+		// The installed files are used as they are; results carry the client's version id.
 		let manifest: PathBuf = bounded_join(list_root, text(&listing, "manifestName")?)?;
 		let raw: Vec<u8> = fs::read(&manifest)?;
-		let manifest_name: &str = manifest
-			.file_name()
-			.and_then(|s| s.to_str())
-			.context("Invalid manifest filename")?;
-		check_manifest(
-			entries
-				.get(manifest_name)
-				.context("Manifest absent from resource list")?,
-			&raw,
-			manifest_name,
-		)?;
 		let fb: Flat<'_> = Flat { data: &raw };
 		let root: BTreeMap<usize, usize> = fb.fields(
 			128_usize
@@ -160,11 +135,9 @@ impl Catalog {
 		let provenance: Value = json!({"list": list_path, "list_sha256": sha256(&fs::read(&list_path)?), "version_id": version_id, "manifest": manifest, "manifest_sha256": sha256(&raw), "bundle_count": bundles.len(), "asset_count": assets.len(), "resource_processor": "ark-unity-rust-v1"});
 		Ok(Self {
 			state,
-			client,
 			data,
 			hot,
 			base,
-			entries,
 			bundles,
 			dependencies,
 			assets,
@@ -190,20 +163,15 @@ impl Catalog {
 		Ok(None)
 	}
 	pub fn file(&self, bundle: &str) -> Result<PathBuf> {
-		let entry: &Value = self
-			.entries
-			.get(bundle)
-			.with_context(|| format!("Bundle absent from current resource list: {bundle}"))?;
 		let (_, path): (&str, PathBuf) = self
 			.candidate(bundle)?
-			.with_context(|| format!("Listed original bundle is not installed: {bundle}"))?;
-		check_entry(entry, &fs::read(&path)?, bundle)?;
+			.with_context(|| format!("Original bundle is not installed: {bundle}"))?;
 		Ok(path)
 	}
 	pub fn describe(&self, bundle: &str) -> Result<Value> {
 		let path: PathBuf = self.file(bundle)?;
 		Ok(
-			json!({"bundle": bundle, "origin": self.candidate(bundle)?.context("Bundle disappeared")?.0, "path": path, "list_check": if text(&self.entries[bundle], "md5")?.len() == 32 { "md5" } else { "size_only_metadata_tag" }}),
+			json!({"bundle": bundle, "origin": self.candidate(bundle)?.context("Bundle disappeared")?.0, "path": path}),
 		)
 	}
 	pub fn closure(&self, roots: &BTreeSet<String>) -> Result<BTreeSet<String>> {
@@ -318,6 +286,13 @@ impl Catalog {
 		Ok(result)
 	}
 
+	/// The client's script classes whose field descriptions services generate, as
+	/// `assembly|namespace|class` lines for the original runtime metadata export.
+	pub fn script_requests(&self) -> Result<Vec<String>> {
+		super::services::script_requests(self)
+	}
+
+	/// `reflection` is the original runtime metadata export for [`Self::script_requests`].
 	pub fn prepare_scene_services(
 		&self,
 		player: &Path,
@@ -325,6 +300,7 @@ impl Catalog {
 		decoded_level: &Value,
 		squad: &Value,
 		extra_routes: &[String],
+		reflection: &Path,
 	) -> Result<(PathBuf, PathBuf, PathBuf)> {
 		let level: Value = read_json(level_inputs)?;
 		let plan: Value = self.resource_plan(
@@ -337,7 +313,7 @@ impl Catalog {
 		write_json(&plan_path, &plan)?;
 		let scene_path: PathBuf = self.prepare_scene(&plan)?;
 		let services_path: PathBuf =
-			super::services::prepare(self, player, &scene_path, level_inputs)?;
+			super::services::prepare(self, player, &scene_path, level_inputs, reflection)?;
 		Ok((scene_path, services_path, plan_path))
 	}
 
@@ -388,17 +364,19 @@ impl Catalog {
 		for entry in decoded["enemyDbRefs"].as_array().into_iter().flatten() {
 			identifiers.insert(text(entry, "id")?.to_owned());
 		}
-		for group in [
-			"characterInsts",
-			"tokenInsts",
-			"characterCards",
-			"tokenCards",
-		] {
-			for entry in decoded["predefines"][group]
-				.as_array()
-				.into_iter()
-				.flatten()
-			{
+		// The challenge mode adds the level's hard predefines; both sets are prepared.
+		for (predefines, group) in ["predefines", "hardPredefines"]
+			.iter()
+			.flat_map(|predefines| {
+				[
+					"characterInsts",
+					"tokenInsts",
+					"characterCards",
+					"tokenCards",
+				]
+				.map(|group| (*predefines, group))
+			}) {
+			for entry in decoded[predefines][group].as_array().into_iter().flatten() {
 				identifiers.insert(text(&entry["inst"], "characterKey")?.to_owned());
 			}
 		}
@@ -759,35 +737,6 @@ pub(crate) fn container_object(path: &Path, container: &str) -> Result<(File, i6
 	found.with_context(|| format!("Original container absent: {container}"))
 }
 
-fn check_entry(entry: &Value, data: &[u8], name: &str) -> Result<()> {
-	ensure!(
-		entry["abSize"].as_u64() == Some(data.len() as u64),
-		"Installed bundle size differs from current list: {name}"
-	);
-	let expected: &str = text(entry, "md5")?;
-	if expected.len() == 32 {
-		ensure!(
-			format!("{:x}", Md5::digest(data)).eq_ignore_ascii_case(expected),
-			"Installed bundle MD5 differs from current list: {name}"
-		);
-	} else {
-		ensure!(
-			entry["meta"].as_bool() == Some(true) || entry["meta"].as_u64() == Some(1),
-			"Bundle has an unclaimed short checksum: {name}"
-		);
-	}
-	Ok(())
-}
-
-fn check_manifest(entry: &Value, data: &[u8], name: &str) -> Result<()> {
-	let expected: &str = text(entry, "md5")?;
-	ensure!(
-		expected.len() == 32 && expected.bytes().all(|byte| byte.is_ascii_hexdigit()),
-		"Original manifest requires a complete MD5 digest"
-	);
-	check_entry(entry, data, name)
-}
-
 struct Flat<'a> {
 	data: &'a [u8],
 }
@@ -879,23 +828,6 @@ impl Flat<'_> {
 mod tests {
 	use super::*;
 	#[test]
-	fn md5_rejects_stale_fallback_and_short_nonmetadata_checksums() {
-		let good: Value = json!({"abSize": 3, "md5": format!("{:x}", Md5::digest(b"abc"))});
-		assert!(check_entry(&good, b"abc", "bundle").is_ok());
-		assert!(check_entry(&good, b"xyz", "bundle").is_err());
-		assert!(check_entry(&json!({"abSize": 3, "md5": "tag"}), b"abc", "bundle").is_err());
-		let metadata: Value = json!({"abSize": 3, "md5": "tag", "meta": 1});
-		assert!(check_entry(&metadata, b"abc", "metadata bundle").is_ok());
-		assert!(check_manifest(&metadata, b"abc", "manifest").is_err());
-		assert!(check_manifest(&good, b"abc", "manifest").is_ok());
-		assert!(check_manifest(
-			&json!({"abSize": 3, "md5": "z".repeat(32)}),
-			b"abc",
-			"manifest"
-		)
-		.is_err());
-	}
-	#[test]
 	fn flatbuffer_offsets_are_bounded_before_allocating() {
 		let fb: Flat<'_> = Flat { data: &[0xff; 140] };
 		assert!(fb.fields(128).is_err());
@@ -929,7 +861,6 @@ mod tests {
 			paths: BTreeMap::new(),
 			version_id: "test".into(),
 			state: PathBuf::new(),
-			client: PathBuf::new(),
 			data: PathBuf::new(),
 			bundles: vec![
 				"scene.ab".into(),
@@ -937,7 +868,6 @@ mod tests {
 				"shared.ab".into(),
 			],
 			dependencies: vec![vec![1], vec![0, 2], vec![]],
-			entries: BTreeMap::new(),
 			hot: PathBuf::new(),
 			base: PathBuf::new(),
 			provenance: Value::Null,
@@ -1002,8 +932,22 @@ mod tests {
 					"ArkBattleRuntime.exe",
 				)
 			});
+		let reflection: PathBuf = std::env::var_os("ARK_RESOURCE_REFERENCE_REFLECTION")
+			.map(PathBuf::from)
+			.unwrap_or_else(|| {
+				let mut exports: Vec<PathBuf> = fs::read_dir(state.join("reflection"))
+					.unwrap()
+					.map(|entry| entry.unwrap().path())
+					.filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+					.collect();
+				exports.sort_by_key(|path| fs::metadata(path).unwrap().modified().unwrap());
+				exports
+					.pop()
+					.expect("No runtime metadata export is installed")
+			});
 		let services: PathBuf =
-			super::super::services::prepare(&catalog, &player, &scene, &level).unwrap();
+			super::super::services::prepare(&catalog, &player, &scene, &level, &reflection)
+				.unwrap();
 		eprintln!("Rust services: {}", services.display());
 		let record: Value = read_json(&services).unwrap();
 		assert_eq!(record["complete"], true);

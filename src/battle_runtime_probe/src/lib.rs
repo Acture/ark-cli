@@ -40,4 +40,8 @@ pub const FILES: &[(&str, &[u8])] = &[
 		"src/battle-services.rs",
 		include_bytes!("../template/src/battle-services.rs"),
 	),
+	(
+		"src/battle-reflection.rs",
+		include_bytes!("../template/src/battle-reflection.rs"),
+	),
 ];

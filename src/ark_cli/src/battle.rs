@@ -2,8 +2,8 @@ use std::{path::PathBuf, process::ExitCode};
 
 use anyhow::Result;
 use ark_battle_runtime::{
-	comparison, BattleRuntime, LadderSearch, PlayerSource, Presentation, RunOptions, RuntimeConfig,
-	Training,
+	comparison, BattleRuntime, Difficulty, LadderSearch, PlayerSource, Presentation, RunOptions,
+	RuntimeConfig, Training,
 };
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::Value;
@@ -78,6 +78,9 @@ struct BattleArgs {
 	/// as a screen-recognition client's (30 ticks = 1 s at speed 1).
 	#[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=900))]
 	delay: u32,
+	/// normal or challenge (突袭); by default normal when the job allows it, else challenge.
+	#[arg(long, value_enum)]
+	difficulty: Option<Mode>,
 }
 
 fn time_scale(value: &str) -> Result<u32, String> {
@@ -85,6 +88,12 @@ fn time_scale(value: &str) -> Result<u32, String> {
 		Ok(scale @ (1 | 2 | 4 | 8 | 16)) => Ok(scale),
 		_ => Err(format!("expected 1, 2, 4, 8 or 16, got {value}")),
 	}
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Mode {
+	Normal,
+	Challenge,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -111,6 +120,10 @@ impl BattleArgs {
 			speed: self.speed,
 			time_scale: self.time_scale,
 			delay: self.delay,
+			difficulty: self.difficulty.map(|mode| match mode {
+				Mode::Normal => Difficulty::Normal,
+				Mode::Challenge => Difficulty::Challenge,
+			}),
 		}
 	}
 }

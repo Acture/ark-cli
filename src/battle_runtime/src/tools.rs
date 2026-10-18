@@ -19,11 +19,6 @@ struct Archive {
 	sha256: &'static str,
 }
 
-const TYPE_TREE_WHEEL: Archive = Archive {
-	name: "typetreegeneratorapi-0.0.10-cp36-abi3-win_amd64.whl",
-	url: "https://files.pythonhosted.org/packages/ed/bc/f911995cae93fa8fd882a677f6bc304965db6f066bbabdee6e761762d512/typetreegeneratorapi-0.0.10-cp36-abi3-win_amd64.whl",
-	sha256: "e96003e973c8d52d221b4ae50f377bcaf7538f2098e437d5383a1b7f13fa72ba",
-};
 const UNITYPY_WHEEL: Archive = Archive {
 	name: "unitypy-1.25.4-cp312-cp312-win_amd64.whl",
 	url: "https://files.pythonhosted.org/packages/5a/ff/916b14f08ebbf4ee30a29e4b5bec592ed62dc0c0b9276a95f903a1da102c/unitypy-1.25.4-cp312-cp312-win_amd64.whl",
@@ -39,29 +34,13 @@ struct Tool {
 	member: &'static str,
 }
 
-const TOOLS: [Tool; 3] = [
-	Tool {
-		path: "tools/typetreegenerator-0.0.10/TypeTreeGeneratorAPI.dll",
-		bundled: "TypeTreeGeneratorAPI.dll",
-		sha256: "bbb823d0ecad8dafb26bce014d63cdbfcfe135935a8fbee24a783b6eb8115b27",
-		archive: &TYPE_TREE_WHEEL,
-		member: "TypeTreeGeneratorAPI/TypeTreeGeneratorAPI.dll",
-	},
-	Tool {
-		path: "tools/typetreegenerator-0.0.10/capstone.dll",
-		bundled: "capstone.dll",
-		sha256: "f03321188a1615d044314b1183dcd9a7ffda09286c31c369d109165d4892dcbb",
-		archive: &TYPE_TREE_WHEEL,
-		member: "TypeTreeGeneratorAPI/capstone.dll",
-	},
-	Tool {
-		path: "tools/unitypy-1.25.4/lzma.tpk",
-		bundled: "lzma.tpk",
-		sha256: "16f1f8b809d1cd3bc3aeebf0cd43ecd3690b326a7a88b2273e57bcd83f5df608",
-		archive: &UNITYPY_WHEEL,
-		member: "UnityPy/resources/lzma.tpk",
-	},
-];
+const TOOLS: [Tool; 1] = [Tool {
+	path: "tools/unitypy-1.25.4/lzma.tpk",
+	bundled: "lzma.tpk",
+	sha256: "16f1f8b809d1cd3bc3aeebf0cd43ecd3690b326a7a88b2273e57bcd83f5df608",
+	archive: &UNITYPY_WHEEL,
+	member: "UnityPy/resources/lzma.tpk",
+}];
 
 /// The prebuilt owned Player, published as a GitHub Release asset of this repository.
 const PLAYER: Archive = Archive {
