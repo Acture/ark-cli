@@ -10,6 +10,8 @@ const KIND_SKILL_DAEMON: u32 = 4;
 const KIND_SKILL_USAGE: u32 = 5;
 const KIND_CAST: u32 = 6;
 const KIND_SUSPEND: u32 = 7;
+// A step that only waits for its conditions, such as MAA's bullet time or camera move.
+const KIND_WAIT: u32 = 8;
 const CONDITION_KILLS: u32 = 1;
 const CONDITION_COST: u32 = 2;
 // Cost change since the step became current: a positive value waits for a rise of at least that
@@ -22,9 +24,12 @@ const CONDITION_WAIT: u32 = 6;
 // The last condition only: once the other conditions are met, the operation must stay ready this
 // many ticks before it is issued, restarting whenever it is not ready. A declared latency.
 const CONDITION_HOLD: u32 = 7;
+// The first condition only: a step still not issued this many ticks after it became current is
+// abandoned for the next one, as MAA's timeout does.
+const CONDITION_DEADLINE: u32 = 8;
 const MAX_CONDITIONS: usize = 8;
 const MAX_ACTIONS: usize = 128;
-const MAX_POLICIES: usize = 12;
+const MAX_POLICIES: usize = 13;
 const CARD_RESPAWNING: i32 = 3;
 // Ticks a queued skill may take to start, for example while its begin animation plays.
 const SKILL_START_WINDOW: u32 = 90;
@@ -91,6 +96,9 @@ static BASE_COST: AtomicU32 = AtomicU32::new(0);
 static CONDITION_CURSOR: AtomicU32 = AtomicU32::new(0);
 // The tick the current condition became the next one to meet.
 static CONDITION_SINCE: AtomicU32 = AtomicU32::new(0);
+// The tick the current step became current, and the steps abandoned at their deadline.
+static STEP_START: AtomicU32 = AtomicU32::new(0);
+static SKIPPED_ACTIONS: AtomicU32 = AtomicU32::new(0);
 
 struct ActionProof {
 	trigger: u32,
@@ -370,6 +378,7 @@ unsafe fn load_probe_actions(
 				let valid: bool = match kind as u32 {
 					CONDITION_KILLS | CONDITION_COST | CONDITION_TICK | CONDITION_WAIT => value >= 0,
 					CONDITION_HOLD => index + 1 == conditions && (0..=900).contains(&value),
+					CONDITION_DEADLINE => index == 0 && value >= 0,
 					CONDITION_COST_CHANGE => value != 0,
 					CONDITION_COOLING => (0..=99).contains(&value),
 					_ => false,
@@ -384,7 +393,7 @@ unsafe fn load_probe_actions(
 					.write((kind as u32, value));
 			}
 			if numbers[0] < 0
-				|| action.kind > KIND_SUSPEND
+				|| action.kind > KIND_WAIT
 				|| !(0..64).contains(&action.row)
 				|| !(0..64).contains(&action.col)
 				|| !(0..=3).contains(&action.direction)
@@ -879,6 +888,7 @@ unsafe fn step_ready(
 		BASE_COST.store(cost, Ordering::Release);
 		CONDITION_CURSOR.store(0, Ordering::Release);
 		CONDITION_SINCE.store(action.tick, Ordering::Release);
+		STEP_START.store(action.tick, Ordering::Release);
 	}
 	// Conditions are met in order; one met is not checked again.
 	while (CONDITION_CURSOR.load(Ordering::Acquire) as usize) < action.condition_count {
@@ -920,6 +930,8 @@ unsafe fn step_ready(
 			}
 			// The hold applies after readiness, in ordered_action_ready.
 			CONDITION_HOLD => break,
+			// The deadline is checked while the step is not ready, in plan_tick.
+			CONDITION_DEADLINE => true,
 			_ => action.tick >= value as u32,
 		};
 		if !met {
@@ -931,7 +943,7 @@ unsafe fn step_ready(
 	}
 	if matches!(
 		action.kind,
-		KIND_SPEED_UP | KIND_SKILL_DAEMON | KIND_SKILL_USAGE
+		KIND_SPEED_UP | KIND_SKILL_DAEMON | KIND_SKILL_USAGE | KIND_WAIT
 	) {
 		return Ok(true);
 	}
@@ -1128,6 +1140,11 @@ unsafe fn plan_tick(
 			KIND_SPEED_UP => ordered_speed_up(api, game, controller)?,
 			KIND_SKILL_USAGE => apply_skill_usage(&action)?,
 			KIND_SKILL_DAEMON => {}
+			KIND_WAIT => {
+				scene_number("original_maa_wait_complete", index);
+				ORDER_CURSOR.fetch_add(1, Ordering::AcqRel);
+				complete_command();
+			}
 			_ => {
 				scene_number("original_step_issued", index);
 				scene_number("original_step_issued_tick", tick);
@@ -1137,6 +1154,15 @@ unsafe fn plan_tick(
 				ORDER_CURSOR.fetch_add(1, Ordering::AcqRel);
 				return Ok(Some(Pending::Ordered(action, proof)));
 			}
+		}
+	} else if action.condition_count > 0 {
+		let (kind, ticks): (u32, i32) = action.conditions.as_ptr().read();
+		if kind == CONDITION_DEADLINE && tick >= STEP_START.load(Ordering::Acquire) + ticks as u32 {
+			scene_number("original_step_deadline_skipped", index);
+			let skipped: u32 = SKIPPED_ACTIONS.fetch_add(1, Ordering::AcqRel) + 1;
+			scene_number("original_maa_skipped_action_count", skipped);
+			ORDER_CURSOR.fetch_add(1, Ordering::AcqRel);
+			complete_command();
 		}
 	}
 	if let Some((policy, mut skill)) = automatic_skill(api, module, game, controller, tick)? {

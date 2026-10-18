@@ -7,7 +7,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Map, Value};
 
-use crate::maa::{fields, integer};
+use crate::maa::{self, fields, integer};
 
 pub(crate) const SCHEMA: &str = "ark-battle-program-v1";
 
@@ -22,7 +22,7 @@ const CONDITIONS: [(&str, i64); 6] = [
 ];
 
 /// Operations, the MAA action type each translates through, and the command kind it forces.
-const OPERATIONS: [(&str, &str, Option<&str>); 8] = [
+const OPERATIONS: [(&str, &str, Option<&str>); 11] = [
 	("deploy", "Deploy", None),
 	("retreat", "Retreat", None),
 	("press", "Skill", None),
@@ -31,15 +31,21 @@ const OPERATIONS: [(&str, &str, Option<&str>); 8] = [
 	("speed", "SpeedUp", None),
 	("policy", "SkillUsage", None),
 	("end", "SkillDaemon", None),
+	// MAA's screen-recognition aids and printed notes: the step only waits for its conditions.
+	("bullet_time", "BulletTime", None),
+	("camera", "MoveCamera", None),
+	("output", "Output", None),
 ];
 
 /// Step fields carried over to and from MAA actions unchanged.
-const TARGET_FIELDS: [&str; 5] = [
+const TARGET_FIELDS: [&str; 7] = [
 	"name",
 	"location",
 	"direction",
 	"skill_usage",
 	"skill_times",
+	"distance",
+	"keep_kills",
 ];
 
 pub(crate) fn is_program(value: &Value) -> bool {
@@ -97,6 +103,13 @@ fn step_delay(step: &Value) -> Result<i64> {
 		.map_or(Ok(0), |value| integer(value, 0, 900, "delay"))
 }
 
+/// Ticks after which a step not yet issued is abandoned for the next, as MAA's timeout does.
+fn step_deadline(step: &Value) -> Result<Option<i64>> {
+	step.get("deadline")
+		.map(|value| integer(value, 0, 2_592_000, "deadline"))
+		.transpose()
+}
+
 fn operation(step: &Value) -> Result<&'static (&'static str, &'static str, Option<&'static str>)> {
 	let name = step["do"].as_str().context("Step `do` missing")?;
 	OPERATIONS
@@ -135,7 +148,10 @@ pub(crate) fn as_job(program: &Value) -> Result<Value> {
 				"direction",
 				"skill_usage",
 				"skill_times",
+				"distance",
+				"keep_kills",
 				"delay",
+				"deadline",
 				"doc",
 			],
 			&["do"],
@@ -143,6 +159,7 @@ pub(crate) fn as_job(program: &Value) -> Result<Value> {
 		)?;
 		step_conditions(step)?;
 		step_delay(step)?;
+		step_deadline(step)?;
 		let (_, maa_type, _) = operation(step)?;
 		let mut action: Map<String, Value> = Map::new();
 		action.insert("type".to_owned(), json!(maa_type));
@@ -192,12 +209,15 @@ pub(crate) fn apply(plan: &mut Value, program: &Value) -> Result<()> {
 			.collect();
 		let delay: i64 = step_delay(step)?;
 		if delay > 0 {
-			ensure!(
-				conditions.len() < 8,
-				"A step has more than eight conditions"
-			);
 			conditions.push(json!([crate::maa::CONDITION_HOLD, delay]));
 		}
+		if let Some(deadline) = step_deadline(step)? {
+			conditions.insert(0, json!([crate::maa::CONDITION_DEADLINE, deadline]));
+		}
+		ensure!(
+			conditions.len() <= 8,
+			"A step has more than eight conditions"
+		);
 		command["conditions"] = json!(conditions);
 		if let Some(kind) = operation(step)?.2 {
 			command["kind"] = json!(kind);
@@ -206,9 +226,13 @@ pub(crate) fn apply(plan: &mut Value, program: &Value) -> Result<()> {
 	Ok(())
 }
 
-/// An MAA job as a program: each action one step, with MAA's conditions in MAA's order.
+/// An MAA job as a program: each action one step, with MAA's conditions in MAA's order. MAA's
+/// delays become waits at the speed the job set: a post delay opens the next step's conditions
+/// and a pre delay closes its own; a timeout becomes the step's deadline.
 pub(crate) fn from_maa(job: &Value) -> Result<Value> {
 	let mut steps: Vec<Value> = Vec::new();
+	let mut speed: i64 = 1;
+	let mut owed: i64 = 0;
 	for action in job["actions"].as_array().context("MAA actions not array")? {
 		let deploy: Value = json!("Deploy");
 		let kind = action
@@ -223,18 +247,21 @@ pub(crate) fn from_maa(job: &Value) -> Result<Value> {
 			"SpeedUp" | "二倍速" => "speed",
 			"SkillDaemon" | "摆完挂机" => "end",
 			"SkillUsage" | "技能用法" => "policy",
-			"Output" | "打印" => continue,
+			"BulletTime" | "子弹时间" => "bullet_time",
+			"MoveCamera" | "移动镜头" => "camera",
+			"Output" | "打印" if maa::has_conditions(action) => "output",
+			"Output" | "打印" => {
+				for key in ["pre_delay", "post_delay", "rear_delay"] {
+					owed += maa::delay(action, key, speed)?;
+				}
+				continue;
+			}
 			name => bail!("Unsupported MAA action {name}"),
 		};
-		for key in ["pre_delay", "post_delay"] {
-			if let Some(value) = action.get(key) {
-				ensure!(
-					integer(value, 0, i32::MAX as i64, key)? == 0,
-					"Wall-clock delay unsupported"
-				);
-			}
-		}
 		let mut when: Vec<Value> = Vec::new();
+		if owed > 0 {
+			when.push(json!({ "wait": owed }));
+		}
 		for (maa_key, name) in [
 			("cost_changes", "cost_change"),
 			("kills", "kills"),
@@ -253,11 +280,23 @@ pub(crate) fn from_maa(job: &Value) -> Result<Value> {
 				}
 			}
 		}
+		let pre: i64 = maa::delay(action, "pre_delay", speed)?;
+		if pre > 0 {
+			when.push(json!({ "wait": pre }));
+		}
+		let deadline: Option<i64> = maa::deadline(action, speed)?;
+		if op == "speed" {
+			speed = 3 - speed;
+		}
+		owed = maa::delay(action, "post_delay", speed)? + maa::delay(action, "rear_delay", speed)?;
 		let mut step: Map<String, Value> = Map::new();
 		if !when.is_empty() {
 			step.insert("when".to_owned(), json!(when));
 		}
 		step.insert("do".to_owned(), json!(op));
+		if let Some(deadline) = deadline {
+			step.insert("deadline".to_owned(), json!(deadline));
+		}
 		for key in TARGET_FIELDS.iter().chain(["doc"].iter()) {
 			if let Some(value) = action.get(*key) {
 				step.insert((*key).to_owned(), value.clone());
@@ -288,6 +327,7 @@ pub(crate) fn to_maa(program: &Value) -> Result<std::result::Result<Value, Vec<S
 	as_job(program)?;
 	let mut reasons: Vec<String> = Vec::new();
 	let mut actions: Vec<Value> = Vec::new();
+	let mut speed: i64 = 1;
 	for (index, step) in steps(program)?.iter().enumerate() {
 		let (op, maa_type, forced) = operation(step)?;
 		if forced.is_some() {
@@ -300,7 +340,23 @@ pub(crate) fn to_maa(program: &Value) -> Result<std::result::Result<Value, Vec<S
 		let mut action: Map<String, Value> = Map::new();
 		action.insert("type".to_owned(), json!(maa_type));
 		let mut order: Vec<usize> = Vec::new();
-		for (name, value) in &conditions {
+		let last: usize = conditions.len().saturating_sub(1);
+		for (position, (name, value)) in conditions.iter().enumerate() {
+			// MAA waits in wall-clock time: a closing wait is this action's pre delay, an
+			// opening one the previous action's post delay.
+			if *name == "wait" {
+				let milliseconds: i64 = maa::delay_milliseconds(*value, speed);
+				if position == last {
+					action.insert("pre_delay".to_owned(), json!(milliseconds));
+				} else if let (0, Some(previous)) = (position, actions.last_mut()) {
+					previous["post_delay"] = json!(milliseconds);
+				} else {
+					reasons.push(format!(
+						"step {index}: MAA waits only before or after an action"
+					));
+				}
+				continue;
+			}
 			let maa_key = match *name {
 				"cost_change" => "cost_changes",
 				"kills" => "kills",
@@ -320,6 +376,15 @@ pub(crate) fn to_maa(program: &Value) -> Result<std::result::Result<Value, Vec<S
 			reasons.push(format!(
 				"step {index}: MAA meets conditions in the order cost_change, kills, cost, cooling"
 			));
+		}
+		if let Some(deadline) = step_deadline(step)? {
+			action.insert(
+				"timeout".to_owned(),
+				json!(maa::delay_milliseconds(deadline, speed)),
+			);
+		}
+		if *op == "speed" {
+			speed = 3 - speed;
 		}
 		for key in TARGET_FIELDS.iter().chain(["doc"].iter()) {
 			if let Some(value) = step.get(*key) {
@@ -380,13 +445,47 @@ mod tests {
 	}
 
 	#[test]
+	fn maa_delays_aids_and_timeouts_round_trip_through_programs() {
+		let job: Value = json!({"minimum_required":"v6.0.0","stage_name":"main_00-01",
+		"opers":[{"name":"甲","skill":1}],
+		"actions":[
+			{"type":"Deploy","name":"甲","location":[1,1],"direction":"Up","post_delay":1000},
+			{"type":"SpeedUp","pre_delay":500,"post_delay":500},
+			{"type":"BulletTime","name":"甲","costs":10},
+			{"type":"Skill","location":[1,1],"timeout":0},
+			{"type":"MoveCamera","distance":[0,-0.7]},
+			{"type":"Output","doc":"wait","kills":2}
+		]});
+		let program: Value = from_maa(&job).unwrap();
+		assert_eq!(
+			program["steps"][1]["when"],
+			json!([{"wait":30},{"wait":15}])
+		);
+		assert_eq!(program["steps"][2]["do"], "bullet_time");
+		assert_eq!(
+			program["steps"][2]["when"],
+			json!([{"wait":30},{"cost":10}])
+		);
+		assert_eq!(program["steps"][3]["deadline"], 0);
+		assert_eq!(program["steps"][4]["do"], "camera");
+		assert_eq!(program["steps"][5]["do"], "output");
+		let exported: Value = to_maa(&program).unwrap().unwrap();
+		assert_eq!(exported["actions"], job["actions"]);
+		let mut plan = json!({"commands":[{"action_index":3,"kind":"skill"}]});
+		apply(&mut plan, &program).unwrap();
+		assert_eq!(plan["commands"][0]["conditions"], json!([[8, 0]]));
+	}
+
+	#[test]
 	fn programs_beyond_maa_name_every_reason_and_compile_explicit_conditions() {
 		let mut program = from_maa(&job()).unwrap();
 		program["steps"][1] =
 			json!({"when":[{"kills":3},{"wait":30}],"do":"cast","name":"甲","delay":12});
 		program["steps"][2] = json!({"when":[{"kills":9},{"cost_change":4}],"do":"end"});
+		// The wait closing step 1 exports as its pre delay; the cast, the step delay and the
+		// condition order cannot.
 		let reasons = to_maa(&program).unwrap().unwrap_err();
-		assert_eq!(reasons.len(), 4, "{reasons:?}");
+		assert_eq!(reasons.len(), 3, "{reasons:?}");
 		let job = as_job(&program).unwrap();
 		assert_eq!(job["actions"][1]["type"], "Skill");
 		let mut plan = json!({"commands":[{"action_index":0,"kind":"spawn"},{"action_index":1,"kind":"skill"}]});

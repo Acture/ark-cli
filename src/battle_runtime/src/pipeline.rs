@@ -10,6 +10,7 @@ use ark_unity::{assets::Catalog, build, io};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+	cell::RefCell,
 	collections::{BTreeMap, BTreeSet},
 	fs,
 	path::{Path, PathBuf},
@@ -52,7 +53,7 @@ impl Default for RunOptions {
 		Self {
 			seed: 1,
 			repeat: false,
-			max_ticks: 36000,
+			max_ticks: 54000,
 			resource_rounds: 3,
 			lua_hotfix: true,
 			trace: false,
@@ -380,18 +381,39 @@ impl BattleRuntime {
 		io::write_json(&cached, &tables)?;
 		Ok(tables)
 	}
-	pub fn squad_for(&self, job: &Path, output: &Path, training: &Training) -> Result<Value> {
+	pub fn squad_for(
+		&self,
+		job: &Path,
+		output: &Path,
+		training: &Training,
+		difficulty: Option<Difficulty>,
+	) -> Result<Value> {
 		let catalog = Catalog::new(&self.config.state, &self.config.client)?;
 		let tables = self.tables(&catalog)?;
+		let job: Value = maa_job(io::read_json(job)?)?;
 		let squad = squad::for_job(
-			&io::read_json(job)?,
+			&job,
 			&squad_tables(&tables),
 			&SquadTraining::team(*training),
+			&self.level_cards(&catalog, &tables, &job, difficulty)?,
 		)?;
 		io::write_json(output, &squad)?;
 		Ok(
 			json!({"squad":output,"training":training_json(training),"operators":squad["operators"].as_array().unwrap().iter().map(|op|op["character_id"].clone()).collect::<Vec<_>>()}),
 		)
+	}
+
+	/// The cards the job's level deals at the difficulty that runs, which no squad brings.
+	fn level_cards(
+		&self,
+		catalog: &Catalog,
+		tables: &Value,
+		job: &Value,
+		difficulty: Option<Difficulty>,
+	) -> Result<BTreeSet<String>> {
+		let stage: Value = resolve_stage(&job["stage_name"], tables, &catalog.assets)?;
+		let (_, decoded) = self.decode_level(catalog, stage["level_id"].as_str().unwrap())?;
+		Ok(maa::level_units(&decoded, maa::difficulty(job, difficulty)?).cards)
 	}
 
 	/// Lower training from the maximum while the original engine still wins, for the lowest
@@ -407,14 +429,18 @@ impl BattleRuntime {
 	) -> Result<Value> {
 		let catalog = Catalog::new(&self.config.state, &self.config.client)?;
 		let tables = self.tables(&catalog)?;
-		let job: Value = io::read_json(job_path)?;
+		let job: Value = maa_job(io::read_json(job_path)?)?;
+		let level_cards: BTreeSet<String> =
+			self.level_cards(&catalog, &tables, &job, options.difficulty)?;
 		let output: PathBuf = io::stage_dir(&self.config.state, "ladder")?;
 		let mut attempts: Vec<Value> = Vec::new();
 		// Job requirements are floors and levels cap at the phase maximum, so distinct
 		// trainings can generate one squad; each squad runs once.
 		let mut outcomes: BTreeMap<String, bool> = BTreeMap::new();
+		// The squad operators the original deck held at the first run.
+		let used: RefCell<Option<BTreeSet<String>>> = RefCell::new(None);
 		let mut run = |training: &SquadTraining, scope: &str| -> Result<bool> {
-			let squad = match squad::for_job(&job, &squad_tables(&tables), training) {
+			let squad = match squad::for_job(&job, &squad_tables(&tables), training, &level_cards) {
 				Ok(squad) => squad,
 				Err(error) => {
 					attempts.push(json!({"scope":scope,"training":squad_training_json(training),"skipped":format!("{error:#}")}));
@@ -429,6 +455,14 @@ impl BattleRuntime {
 			let squad_path: PathBuf = output.join(format!("step-{:02}.squad.json", attempts.len()));
 			io::write_json(&squad_path, &squad)?;
 			let report: Value = self.run_maa(job_path, &squad_path, options)?;
+			used.borrow_mut().get_or_insert_with(|| {
+				report["squad_use"]["used"]
+					.as_array()
+					.into_iter()
+					.flatten()
+					.filter_map(|id| id.as_str().map(str::to_owned))
+					.collect()
+			});
 			// A tier passes when the original engine wins, even before later commands become due,
 			// and, unless leaks are allowed, no enemy reached an exit.
 			let passed: bool = report["passed"] == true
@@ -445,13 +479,18 @@ impl BattleRuntime {
 		let mut current: SquadTraining = SquadTraining::default();
 		let mut tradeoffs: Vec<Value> = Vec::new();
 		let maximum_passed: bool = run(&current, "team")?;
-		if maximum_passed {
+		// Lowering training says nothing where the level replaced every squad operator with its
+		// own cards; only operators the deck held are lowered alone.
+		let used: BTreeSet<String> = used.borrow().clone().unwrap_or_default();
+		let training_applies: bool = !used.is_empty();
+		if maximum_passed && training_applies {
 			let ids: Vec<String> = if per_operator {
-				squad::for_job(&job, &squad_tables(&tables), &current)?["operators"]
+				squad::for_job(&job, &squad_tables(&tables), &current, &level_cards)?["operators"]
 					.as_array()
 					.into_iter()
 					.flatten()
 					.filter_map(|op| op["character_id"].as_str().map(str::to_owned))
+					.filter(|id| used.contains(id))
 					.collect()
 			} else {
 				Vec::new()
@@ -548,7 +587,8 @@ impl BattleRuntime {
 		};
 		let report = json!({"schema":"ark-battle-training-ladder-v3","job":job_path,"maximum_passed":maximum_passed,
 			"search_mode":search.name(),"per_operator":per_operator,"allow_leaks":allow_leaks,
-			"lowest_passing_training":if maximum_passed { squad_training_json(&current) } else { Value::Null },
+			"training_applies":training_applies,
+			"lowest_passing_training":if maximum_passed && training_applies { squad_training_json(&current) } else { Value::Null },
 			"stat_tradeoffs":tradeoffs,"runs":outcomes.len(),"attempts":attempts,"order":order,"search":assumption,
 			"verification_scope":"original-engine observations per tier; not an Ark Solver verdict"});
 		io::write_json(&output.join("ladder.json"), &report)?;
@@ -570,7 +610,7 @@ impl BattleRuntime {
 			None => {
 				let directory: PathBuf = io::stage_dir(&self.config.state, "squads")?;
 				generated = directory.join("squad.json");
-				self.squad_for(job_path, &generated, training)?;
+				self.squad_for(job_path, &generated, training, options.difficulty)?;
 				&generated
 			}
 		};
@@ -602,12 +642,18 @@ impl BattleRuntime {
 	}
 
 	/// The squad a job or program runs with: the given one, or one generated at the training.
-	fn squad_path(&self, job: &Path, squad: Option<&Path>, training: &Training) -> Result<PathBuf> {
+	fn squad_path(
+		&self,
+		job: &Path,
+		squad: Option<&Path>,
+		training: &Training,
+		difficulty: Option<Difficulty>,
+	) -> Result<PathBuf> {
 		match squad {
 			Some(path) => Ok(path.to_path_buf()),
 			None => {
 				let path: PathBuf = io::stage_dir(&self.config.state, "squads")?.join("squad.json");
-				self.squad_for(job, &path, training)?;
+				self.squad_for(job, &path, training, difficulty)?;
 				Ok(path)
 			}
 		}
@@ -623,7 +669,7 @@ impl BattleRuntime {
 		options: &RunOptions,
 		maximum: u32,
 	) -> Result<Value> {
-		let squad_path: PathBuf = self.squad_path(job, squad, training)?;
+		let squad_path: PathBuf = self.squad_path(job, squad, training, options.difficulty)?;
 		let mut attempts: Vec<Value> = Vec::new();
 		let mut perfect = |delay: u32| -> Result<bool> {
 			let report: Value = self.run_maa(
@@ -685,7 +731,7 @@ impl BattleRuntime {
 		options: &RunOptions,
 		waits: &[u32],
 	) -> Result<Value> {
-		let squad_path: PathBuf = self.squad_path(job, squad, training)?;
+		let squad_path: PathBuf = self.squad_path(job, squad, training, options.difficulty)?;
 		let input: Value = io::read_json(job)?;
 		let base: Value = if program::is_program(&input) {
 			input
@@ -795,14 +841,11 @@ impl BattleRuntime {
 		let input: Value = io::read_json(job_path)?;
 		// A battle program translates through its MAA-shaped job, then takes its own conditions.
 		let program: Option<&Value> = program::is_program(&input).then_some(&input);
-		let job: Value = match program {
-			Some(program) => program::as_job(program)?,
-			None => input.clone(),
-		};
+		let job: Value = maa_job(input.clone())?;
 		let squad: Value = io::read_json(squad_path)?;
 		squad::compile(&squad)?;
 		let tables = self.tables(&catalog)?;
-		let stage = resolve_stage(&job["stage_name"], &tables["stages"], &catalog.assets)?;
+		let stage = resolve_stage(&job["stage_name"], &tables, &catalog.assets)?;
 		let level_id = stage["level_id"].as_str().unwrap();
 		let difficulty: Difficulty = maa::difficulty(&job, options.difficulty)?;
 		ensure!(
@@ -815,13 +858,40 @@ impl BattleRuntime {
 			&squad,
 			&tables["characters"],
 			&tables["modules"],
-			&maa::level_cards(&decoded, difficulty),
+			&maa::level_units(&decoded, difficulty),
 		)?;
 		if let Some(program) = program {
 			program::apply(&mut plan, program)?;
 		}
 		let native = maa::compile(&plan, options.delay)?;
 		let mut extra: BTreeSet<String> = BTreeSet::new();
+		// Routes the original runtime requested in earlier runs of this level, such as an enemy
+		// variant's prefab, so each run need not discover them again.
+		let route_key = format!(
+			"{:x}",
+			Sha256::digest(serde_json::to_vec(
+				&json!({"catalog":catalog.provenance(),"level":level_id})
+			)?)
+		);
+		let remembered: PathBuf = self
+			.config
+			.state
+			.join("routes")
+			.join(format!("{}.json", &route_key[..24]));
+		if remembered.is_file() {
+			let routes: Value = io::read_json(&remembered)?;
+			for route in routes
+				.as_array()
+				.context("Remembered routes must be an array")?
+			{
+				extra.insert(
+					route
+						.as_str()
+						.context("Remembered route must be text")?
+						.to_owned(),
+				);
+			}
+		}
 		// Summons deployed by name are not squad members; prepare their original prefabs too.
 		for command in plan["commands"].as_array().into_iter().flatten() {
 			if let Some(token) = command["character_id"]
@@ -860,6 +930,7 @@ impl BattleRuntime {
 				speed: options.speed,
 				time_scale: options.time_scale,
 				difficulty,
+				memory: stage["memory"] == true,
 			});
 			request.notes = json!({"plan":prepared.plan,"attempt":attempt});
 			let (output, result) = runtime::run(&self.config, &request)?;
@@ -874,12 +945,20 @@ impl BattleRuntime {
 			if !new.is_empty() && attempt < options.resource_rounds {
 				eprintln!("INFO ark_battle_runtime: attempt {attempt}, preparing {} additional original resource routes",new.len());
 				extra.extend(new);
+				fs::create_dir_all(remembered.parent().unwrap())?;
+				io::write_json(&remembered, &json!(extra))?;
 				continue;
 			}
-			let mut report = json!({"run":output,"passed":result["passed"],"level_id":level_id,"stage_ids":stage["stage_ids"],"automatic_skill_count":result["automatic_skill_count"],"battle_outcome":result["battle_outcome"],"maa_job_complete":result["maa_job_complete"],"completed_action_count":result["completed_action_count"],"remaining_action_count":result["remaining_action_count"],"runtime_diagnostics":result["runtime_diagnostics"],"extra_routes":extra,"catalog_version":catalog.version_id,"resource_origins":origins(&prepared.scene,&prepared.services)?});
+			let mut report = json!({"run":output,"passed":result["passed"],"level_id":level_id,"stage_ids":stage["stage_ids"],"automatic_skill_count":result["automatic_skill_count"],"battle_outcome":result["battle_outcome"],"maa_job_complete":result["maa_job_complete"],"completed_action_count":result["completed_action_count"],"skipped_action_count":result["skipped_action_count"],"remaining_action_count":result["remaining_action_count"],"runtime_diagnostics":result["runtime_diagnostics"],"extra_routes":extra,"catalog_version":catalog.version_id,"resource_origins":origins(&prepared.scene,&prepared.services)?});
 			report["job_result"] = result["job_result"].clone();
 			report["battle_events"] = crate::events::summarize(&output.join("run/observer.jsonl"))?;
 			report["delay_ticks"] = json!(options.delay);
+			// Operators the job deploys without declaring them; a generated squad gives them
+			// MAA's default skill, which the job's author may not have used.
+			report["undeclared_operators"] = plan["undeclared"].clone();
+			// Squad operators the original deck held; a level that deals its own operators can
+			// leave some or all of the squad unused, and then their training has no effect.
+			report["squad_use"] = result["squad_use"].clone();
 			report["resource_signature"] =
 				resource_signature(&prepared, &runtime::inventory(&self.config, false)?)?;
 			report["difficulty"] = json!(difficulty.name());
@@ -952,9 +1031,37 @@ impl BattleRuntime {
 	}
 }
 
+/// The MAA-shaped job of an MAA job or a battle program.
+fn maa_job(input: Value) -> Result<Value> {
+	if program::is_program(&input) {
+		program::as_job(&input)
+	} else {
+		Ok(input)
+	}
+}
+
+/// Original stages by id, each with whether it is a memory: the stage table, then the handbook's
+/// paradox simulations, which the stage table does not list.
+fn original_stages(tables: &Value) -> Result<Vec<(&str, &Value, bool)>> {
+	let mut stages: Vec<(&str, &Value, bool)> = tables["stages"]["stages"]
+		.as_object()
+		.context("Original stages table missing")?
+		.iter()
+		.map(|(id, stage)| (id.as_str(), stage, false))
+		.collect();
+	stages.extend(
+		tables["handbook"]["handbookStageData"]
+			.as_object()
+			.context("Original handbook stages missing")?
+			.values()
+			.filter_map(|stage| Some((stage["stageId"].as_str()?, stage, true))),
+	);
+	Ok(stages)
+}
+
 fn resolve_stage(
 	wanted: &Value,
-	table: &Value,
+	tables: &Value,
 	assets: &BTreeMap<String, String>,
 ) -> Result<Value> {
 	let wanted = wanted
@@ -969,11 +1076,9 @@ fn resolve_stage(
 				.map(|level| (level.to_lowercase(), level.to_owned()))
 		})
 		.collect();
+	let stages: Vec<(&str, &Value, bool)> = original_stages(tables)?;
 	let mut candidates: BTreeMap<String, Vec<String>> = BTreeMap::new();
-	for (id, stage) in table["stages"]
-		.as_object()
-		.context("Original stages table missing")?
-	{
+	for &(id, stage, _) in &stages {
 		let Some(level) = stage["levelId"].as_str() else {
 			continue;
 		};
@@ -981,7 +1086,7 @@ fn resolve_stage(
 			continue;
 		};
 		if [
-			Some(id.as_str()),
+			Some(id),
 			Some(level),
 			level.rsplit('/').next(),
 			stage["code"].as_str(),
@@ -994,7 +1099,7 @@ fn resolve_stage(
 			candidates
 				.entry(original.clone())
 				.or_default()
-				.push(id.clone());
+				.push(id.to_owned());
 		}
 	}
 	if let Some(level) = levels.get(&wanted) {
@@ -1008,17 +1113,16 @@ fn resolve_stage(
 	let (level, mut ids) = candidates.into_iter().next().unwrap();
 	ids.sort();
 	// The challenge mode is the level's original FOUR_STAR stage, such as main_07-16#f#.
-	let challenge: bool = table["stages"]
-		.as_object()
-		.into_iter()
-		.flatten()
-		.any(|(_, stage)| {
-			stage["difficulty"] == "FOUR_STAR"
-				&& stage["levelId"]
-					.as_str()
-					.is_some_and(|id| id.eq_ignore_ascii_case(&level))
-		});
-	Ok(json!({"level_id":level,"stage_ids":ids.join(","),"challenge":challenge}))
+	let challenge: bool = stages.iter().any(|(_, stage, _)| {
+		stage["difficulty"] == "FOUR_STAR"
+			&& stage["levelId"]
+				.as_str()
+				.is_some_and(|id| id.eq_ignore_ascii_case(&level))
+	});
+	let memory: bool = stages
+		.iter()
+		.any(|(id, _, memory)| *memory && ids.iter().any(|wanted| wanted == id));
+	Ok(json!({"level_id":level,"stage_ids":ids.join(","),"challenge":challenge,"memory":memory}))
 }
 
 fn observed_requests(log: &str) -> BTreeSet<String> {
@@ -1307,9 +1411,12 @@ mod tests {
 			("gamedata/levels/a/level_foo".to_owned(), "a.ab".to_owned()),
 			("gamedata/levels/a/level_bar".to_owned(), "b.ab".to_owned()),
 		]);
-		let table = json!({"stages":{"some_original_id":{"code":"EV-3","levelId":"a/level_foo"},
+		let mut table = json!({"stages":{"stages":{
+			"some_original_id":{"code":"EV-3","levelId":"a/level_foo"},
 			"some_original_id#f#":{"code":"EV-3","levelId":"A/level_foo","difficulty":"FOUR_STAR"},
-			"other_id":{"code":"EV-4","levelId":"a/level_bar","difficulty":"NORMAL"}}});
+			"other_id":{"code":"EV-4","levelId":"a/level_bar","difficulty":"NORMAL"}}},
+			"handbook":{"handbookStageData":{"char_fixture":
+				{"stageId":"mem_fixture_1","levelId":"a/level_memory","code":"MEM-1"}}}});
 		let stage: Value = resolve_stage(&json!("ev-3"), &table, &assets).unwrap();
 		assert_eq!(stage["level_id"], "a/level_foo");
 		assert_eq!(stage["challenge"], true);
@@ -1318,6 +1425,23 @@ mod tests {
 			false
 		);
 		assert!(resolve_stage(&json!("1-1"), &table, &assets).is_err());
+		// Paradox simulations resolve through the handbook.
+		assert!(resolve_stage(&json!("mem_fixture_1"), &table, &assets).is_err());
+		let mut assets = assets;
+		assets.insert(
+			"gamedata/levels/a/level_memory".to_owned(),
+			"c.ab".to_owned(),
+		);
+		let stage: Value = resolve_stage(&json!("mem_fixture_1"), &table, &assets).unwrap();
+		assert_eq!(stage["level_id"], "a/level_memory");
+		assert_eq!(stage["stage_ids"], "mem_fixture_1");
+		assert_eq!(stage["memory"], true);
+		assert_eq!(
+			resolve_stage(&json!("ev-3"), &table, &assets).unwrap()["memory"],
+			false
+		);
+		table["handbook"] = json!({});
+		assert!(resolve_stage(&json!("ev-3"), &table, &assets).is_err());
 	}
 	#[test]
 	fn bisection_finds_the_lowest_passing_rank_trying_the_floor_first() {

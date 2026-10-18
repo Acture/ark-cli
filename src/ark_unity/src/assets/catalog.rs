@@ -385,6 +385,10 @@ impl Catalog {
 			.keys()
 			.filter(|key| key.starts_with("battle/prefabs/"))
 			.collect();
+		// A unit whose prefab carries another name, such as an enemy variant whose data selects
+		// another prefab key, is left to the original runtime: the resource rounds add whatever
+		// prefab it requests.
+		let mut deferred: Vec<String> = Vec::new();
 		for identifier in identifiers {
 			let mut matches: Vec<&String> = prefabs
 				.iter()
@@ -402,10 +406,9 @@ impl Catalog {
 					}
 				}
 			}
-			ensure!(
-				!matches.is_empty(),
-				"No original prefab candidate for {identifier}"
-			);
+			if matches.is_empty() {
+				deferred.push(identifier.clone());
+			}
 			for key in matches {
 				selected.insert(key.clone(), self.assets[key].clone());
 			}
@@ -447,7 +450,7 @@ impl Catalog {
 			"Resource request exceeds bounded preparation"
 		);
 		Ok(
-			json!({"schema": "ark-battle-resource-plan-v2", "level_id": level_id, "scene_bundle": scene, "bundles": closure, "selected_routes": selected, "extra_routes": extra.iter().collect::<BTreeSet<_>>(), "dynamic_resource_completeness_certified": false, "limitation": "String-selected prefabs may request additional resources; original runtime must verify them."}),
+			json!({"schema": "ark-battle-resource-plan-v2", "level_id": level_id, "scene_bundle": scene, "bundles": closure, "selected_routes": selected, "extra_routes": extra.iter().collect::<BTreeSet<_>>(), "deferred_prefabs": deferred, "dynamic_resource_completeness_certified": false, "limitation": "String-selected prefabs may request additional resources; original runtime must verify them."}),
 		)
 	}
 

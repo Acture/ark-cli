@@ -60,6 +60,10 @@ defaults to `assets/battle-runtime/` under the working directory, or `--state` /
 `run` resolves the job's stage from the original StageDB. Without `--squad` it generates one from
 the original tables at the training options below (default: the original maximum) and records it
 in the report. A squad file supplies identity and training absent from MAA jobs; see `examples/`.
+A level can deal its own operators instead: the report's `squad_use` lists the squad operators the
+original deck held (`used`), those it left out (`unused`) and the level's cards (`level_cards`).
+A story stage such as 17-15 holds no squad operator; a paradox simulation holds its featured
+operator from the squad and its fixed support from the level.
 Phase, potential rank and skill index are zero-based original values; operators without skills use
 skill index -1. `favor_battle_phase` is the original trust battle phase, 0..100 with 50 at 100%
 trust. `squad-for` writes the generated squad for inspection or editing:
@@ -104,7 +108,9 @@ for per-operator minimums. Both searches are greedy across axes and operators, s
 matter. Every tier is an original-engine run, and a squad that two trainings generate runs once.
 A tier passes when the original engine wins with no enemy reaching an exit; `--allow-leaks` also
 passes wins that leak. `ladder.json` lists every attempt with its remaining life points and leaks,
-its concrete job and the lowest passing training:
+its concrete job and the lowest passing training. Where the original deck holds no squad operator,
+`training_applies` is false and no lower training is tried; `--per-operator` lowers only operators
+the deck held:
 
 ```powershell
 ark-cli battle min-training path/to/job.json --search bisect --per-operator
@@ -128,9 +134,10 @@ ark-cli battle min-training path/to/job.json --search bisect --per-operator
 | Field | Values |
 | --- | --- |
 | `when` | `kills`, `cost` (at least), `cost_change` (since the step became current), `cooling` (exactly), `tick` (at least), `wait` (ticks after the previous condition) |
-| `do` | `deploy`, `retreat`, `press` (MAA's Skill), `cast`, `suspend`, `speed`, `policy` (MAA's SkillUsage), `end` (MAA's SkillDaemon) |
+| `do` | `deploy`, `retreat`, `press` (MAA's Skill), `cast`, `suspend`, `speed`, `policy` (MAA's SkillUsage), `end` (MAA's SkillDaemon); `bullet_time`, `camera` and `output` only wait for their conditions |
 | `delay` | Ticks the operation must stay ready, after the conditions, before it is issued |
-| other | `name`, `location`, `direction`, `skill_usage`, `skill_times` as in MAA actions |
+| `deadline` | Ticks after the step becomes current at which it is skipped if still not issued (MAA's timeout) |
+| other | `name`, `location`, `direction`, `skill_usage`, `skill_times`, `distance`, `keep_kills` as in MAA actions |
 
 `battle convert INPUT OUTPUT` converts by the input's kind: an MAA job becomes a program, and a
 program becomes an MAA job when MAA can express it, otherwise every reason it cannot is listed
@@ -259,7 +266,7 @@ comparison passes; 1 means failed qualification and 2 means an error. A natural
 `original_loss` is a valid observation. `original_win` / `original_loss` are separate from Ark
 Solver's `ExpectedVictory` / `ExpectedDefeat`; the runtime does not certify official-client equivalence.
 
-## MAA profile `original-state-v3`
+## MAA profile `original-state-v4`
 
 MAA jobs compile to battle programs. The adapter keeps each job's intent and leaves out what MAA
 needs only as a screen-recognition client: screenshot polling, click delays, the 1.5 s auto-skill
@@ -270,19 +277,25 @@ interval and retry limits. Results are therefore those of ideal timing.
 | Deploy, Skill, Retreat | Deploy, press the skill button, retreat steps |
 | Skill on an active, suspendable skill | The press suspends the skill, as MAA's click does |
 | kills, costs, cost_changes, cooling | Conditions in MAA's order: cost_changes, kills, costs, cooling (exactly N cooling) |
-| Device and summon names (for example `干扰地雷`, `“弦惊”`) | Undeclared action names resolve to a card the level deals at the running difficulty, else to one original summon token; their Deploy may take direction `None`, which faces up as the levels' own devices do |
+| Level cards and summon names (for example `干扰地雷`, `“弦惊”`) | Names resolve to a card the level deals at the running difficulty, hidden ones included, else, for undeclared names, to one original summon token; their Deploy may take direction `None`, which faces up as the levels' own devices do |
+| Operators the level deals (paradox simulations, story stages) | An undeclared name is the level's card at its fixed training; a declared operator comes from the squad, which the original conversion of a paradox simulation puts in place of the level's card of that operator |
 | Skill/Retreat with name and location | The named unit must stand on that tile when it acts |
+| Skill/Retreat with only a location | The unit on that tile: the level's own device, or the job's latest deploy there |
+| pre_delay, post_delay, rear_delay | Waits in ticks at the speed the job set (30 per second at speed 1, 60 after SpeedUp): a pre delay after the action's conditions, a post or rear delay before the next action's |
+| timeout | The action is skipped when not issued within that many milliseconds of becoming current, as MAA moves on |
+| BulletTime, MoveCamera | Screen-recognition aids: the step keeps its conditions and delays and does nothing else |
 | SpeedUp | Original speed toggle verified |
 | SkillUsage, skill_usage 0/1/2 | Manual, automatic, or bounded automatic use with skill_times |
 | SkillDaemon | Wait for the natural battle end while applying skill policies |
-| Output | Accept doc/doc_color presentation fields; no battle effect |
-| opers, groups, requirements | Original names and explicit squad; one eligible member per group; module types match the original UniEquipDB |
-| stage_name | Unique original stage code, name, stageId or levelId in the current catalog |
+| Output | Waits for its conditions, as every MAA action does; doc/doc_color are presentation only |
+| opers, groups, requirements | Original names and explicit squad of up to 13 (12 and a support unit); each group takes its first eligible member not already in use; module types match the original UniEquipDB |
+| Deployed operators missing from opers | Unless the level deals them or a summon has the name: added to a generated squad with MAA's default skill 1 and listed as `undeclared_operators` in the report; a squad file overrides it |
+| stage_name | Unique original stage code, name, stageId or levelId in the current catalog, including paradox simulations from the original handbook, which convert as the client's memories |
 | difficulty | 0..3; normal unless the job selects only the challenge or `--difficulty` asks for it |
 
-Nonzero delays, finite timeouts, timers, camera/bullet-time actions, location-only
-Skill/Retreat without a name and skill_usage 3 are rejected. Presence in the catalog
-alone does not guarantee that a stage's runtime dependencies can be loaded.
+Timers (ResetStopwatch, elapsed_time), Click, Swipe, SetUnitLocation and skill_usage 3 are
+rejected. Presence in the catalog alone does not guarantee that a stage's runtime dependencies
+can be loaded.
 
 ## Limits and validation
 

@@ -18,10 +18,9 @@ pub(crate) fn compile(value: &Value) -> Result<String> {
 	let operators = value["operators"]
 		.as_array()
 		.context("Squad operators must be an array")?;
-	ensure!(
-		(1..=12).contains(&operators.len()),
-		"Expected 1..12 operators"
-	);
+	// Twelve squad members and a support operator, as the client deploys them; none when the
+	// level deals its own operators.
+	ensure!(operators.len() <= 13, "Expected at most 13 operators");
 	let identifier = Regex::new(r"^char_[A-Za-z0-9_]{1,75}$")?;
 	let optional = Regex::new(r"^[A-Za-z0-9_#-]{1,100}$")?;
 	let module_id = Regex::new(r"^[A-Za-z0-9_]{1,100}$")?;
@@ -96,24 +95,39 @@ pub(crate) fn compile(value: &Value) -> Result<String> {
 	Ok(result)
 }
 
-pub(crate) fn verify(value: &Value, converted: &Value) -> bool {
-	let Some(actual) = converted["characters"].as_array() else {
-		return false;
-	};
-	let Some(operators) = value["operators"].as_array() else {
-		return false;
-	};
-	if actual.len() != operators.len() {
-		return false;
-	}
+/// Which squad operators the original deck holds, each at its requested training, and which
+/// cards the level dealt in their place, or `None` when the deck contradicts the squad. A level
+/// that deals its own operators, such as a story stage, can leave the squad unused; a paradox
+/// simulation puts the squad's operator in place of the level's card of it.
+pub(crate) fn verify(value: &Value, converted: &Value) -> Option<Value> {
+	let actual: &Vec<Value> = converted["characters"].as_array()?;
+	let operators: &Vec<Value> = value["operators"].as_array()?;
 	let ids: BTreeSet<&str> = actual.iter().filter_map(|e| e["id"].as_str()).collect();
 	if ids.len() != actual.len() {
-		return false;
+		return None;
 	}
+	let requested: BTreeSet<&str> = operators
+		.iter()
+		.filter_map(|op| op["character_id"].as_str())
+		.collect();
+	let mut level: Vec<&str> = Vec::new();
+	for entry in actual {
+		let id: &str = entry["id"].as_str()?;
+		if !requested.contains(id) {
+			if entry["isPredefined"] != true {
+				return None;
+			}
+			level.push(id);
+		}
+	}
+	let mut used: Vec<&str> = Vec::new();
+	let mut unused: Vec<&str> = Vec::new();
 	for op in operators {
 		let Some(entry) = actual.iter().find(|e| e["id"] == op["character_id"]) else {
-			return false;
+			unused.push(op["character_id"].as_str()?);
+			continue;
 		};
+		used.push(op["character_id"].as_str()?);
 		for (requested, original) in [
 			("level", "level"),
 			("potential_rank", "potentialRank"),
@@ -121,17 +135,17 @@ pub(crate) fn verify(value: &Value, converted: &Value) -> bool {
 			("favor_battle_phase", "favorBattlePhase"),
 		] {
 			if entry[original] != op[requested] {
-				return false;
+				return None;
 			}
 		}
 		if entry["evolvePhase"] != op["phase"]
 			&& entry["evolvePhase"] != format!("PHASE_{}", op["phase"])
 		{
-			return false;
+			return None;
 		}
 		// Operators without skills (skill_index -1) have no main skill level to compare.
 		if op["skill_index"] != -1 && entry["mainSkill"]["level"] != op["skill_level"] {
-			return false;
+			return None;
 		}
 		fn modules(v: &Value) -> Option<Vec<(String, i64)>> {
 			let Some(array) = v.as_array() else {
@@ -145,16 +159,16 @@ pub(crate) fn verify(value: &Value, converted: &Value) -> bool {
 			Some(entries)
 		}
 		if modules(&entry["uniEquipQueries"]) != modules(&op["modules"]) {
-			return false;
+			return None;
 		}
 		if !op["skin_id"].is_null() && entry["skinData"]["skinId"] != op["skin_id"] {
-			return false;
+			return None;
 		}
 		if !op["template_id"].is_null() && entry["tmplId"] != op["template_id"] {
-			return false;
+			return None;
 		}
 	}
-	true
+	Some(json!({"used":used,"unused":unused,"level_cards":level}))
 }
 
 /// Training applied to every generated operator. Each axis lowers independently; a job's own
@@ -225,7 +239,14 @@ pub(crate) struct Tables<'a> {
 	pub favor: &'a Value,
 }
 
-pub(crate) fn for_job(job: &Value, tables: &Tables<'_>, training: &SquadTraining) -> Result<Value> {
+/// The squad a job names at a training. An undeclared name of a card the level deals, from
+/// `level_cards`, or of a summon stays out of it.
+pub(crate) fn for_job(
+	job: &Value,
+	tables: &Tables<'_>,
+	training: &SquadTraining,
+	level_cards: &BTreeSet<String>,
+) -> Result<Value> {
 	training.team.validate()?;
 	for operator in training.operators.values() {
 		operator.validate()?;
@@ -275,6 +296,38 @@ pub(crate) fn for_job(job: &Value, tables: &Tables<'_>, training: &SquadTraining
 			}
 		}
 		operators.push(found.context("No original operator available for group")?);
+	}
+	// MAA deploys an operator the job never declares from the player's own squad; such an
+	// operator joins the squad at MAA's default skill, unless it is a card or summon no squad
+	// brings.
+	let declared: BTreeSet<&str> = direct
+		.iter()
+		.chain(groups)
+		.filter_map(|entry| entry["name"].as_str())
+		.collect();
+	for action in job["actions"].as_array().into_iter().flatten() {
+		let deploy: bool = matches!(
+			action
+				.get("type")
+				.and_then(Value::as_str)
+				.unwrap_or("Deploy"),
+			"Deploy" | "部署"
+		);
+		let Some(name) = action["name"]
+			.as_str()
+			.filter(|name| deploy && !declared.contains(name))
+		else {
+			continue;
+		};
+		if crate::maa::token_by_name(tables.characters, level_cards, name)?.is_some() {
+			continue;
+		}
+		if let Some([id]) = by_name.get(name).map(Vec::as_slice) {
+			if chosen.insert(id.clone()) {
+				let op: Value = json!({ "name": name });
+				operators.push(auto_entry(id, tables, &op, training.of(id))?);
+			}
+		}
 	}
 	let result = json!({"schema":"ark-battle-squad-v2","operators":operators});
 	compile(&result)?;
@@ -478,6 +531,14 @@ mod tests {
 	}
 
 	fn generate(job: &Value, training: &Training) -> Result<Value> {
+		generate_with(job, training, &BTreeSet::new())
+	}
+
+	fn generate_with(
+		job: &Value,
+		training: &Training,
+		level_cards: &BTreeSet<String>,
+	) -> Result<Value> {
 		let (characters, modules, favor) = tables();
 		for_job(
 			job,
@@ -487,7 +548,63 @@ mod tests {
 				favor: &favor,
 			},
 			&SquadTraining::team(*training),
+			level_cards,
 		)
+	}
+
+	#[test]
+	fn the_original_deck_shows_which_squad_operators_the_level_kept() {
+		let squad = json!({"operators":[
+			{"character_id":"char_fixture_a","level":90,"phase":2,"potential_rank":5,
+				"favor_battle_phase":100,"skill_index":0,"skill_level":10},
+			{"character_id":"char_fixture_b","level":90,"phase":2,"potential_rank":5,
+				"favor_battle_phase":100,"skill_index":0,"skill_level":10}]});
+		let card = |id: &str, level: i64, predefined: bool| -> Value {
+			json!({"id":id,"level":level,"evolvePhase":"PHASE_2","potentialRank":5,
+				"mainSkillIndex":0,"favorBattlePhase":100,"mainSkill":{"level":10},
+				"isPredefined":predefined})
+		};
+		// A paradox simulation: the squad's operator in place of the level's card, a level card
+		// beside it, and a squad operator the level left out.
+		let deck = json!({"characters":[card("char_fixture_a", 90, false),
+			card("char_fixture_level", 50, true)]});
+		assert_eq!(
+			verify(&squad, &deck),
+			Some(
+				json!({"used":["char_fixture_a"],"unused":["char_fixture_b"],
+				"level_cards":["char_fixture_level"]})
+			)
+		);
+		// A squad card at other training, or an extra card the level does not deal, contradicts.
+		let deck = json!({"characters":[card("char_fixture_a", 80, false)]});
+		assert_eq!(verify(&squad, &deck), None);
+		let deck = json!({"characters":[card("char_fixture_other", 90, false)]});
+		assert_eq!(verify(&squad, &deck), None);
+	}
+
+	#[test]
+	fn undeclared_deploys_join_unless_the_level_deals_them() {
+		let job = json!({"opers":[{"name":"甲"}],"actions":[
+			{"type":"Deploy","name":"甲"},{"type":"Deploy","name":"丙"}]});
+		// A declared operator always joins, as the paradox simulations' own operators do.
+		let ids = |squad: &Value| -> Vec<String> {
+			squad["operators"]
+				.as_array()
+				.unwrap()
+				.iter()
+				.map(|op| op["character_id"].as_str().unwrap().to_owned())
+				.collect()
+		};
+		assert_eq!(
+			ids(&generate(&job, &Training::default()).unwrap()),
+			["char_fixture_a", "char_fixture_c"]
+		);
+		let dealt: BTreeSet<String> =
+			BTreeSet::from(["char_fixture_a".to_owned(), "char_fixture_c".to_owned()]);
+		assert_eq!(
+			ids(&generate_with(&job, &Training::default(), &dealt).unwrap()),
+			["char_fixture_a"]
+		);
 	}
 
 	#[test]

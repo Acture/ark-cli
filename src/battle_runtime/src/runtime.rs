@@ -10,11 +10,12 @@ use std::{
 };
 
 /// Original tables the probe exports with their probe output variable and cached label.
-pub(crate) const IDENTITY_TABLES: [(&str, &str); 4] = [
+pub(crate) const IDENTITY_TABLES: [(&str, &str); 5] = [
 	("ARK_RUNTIME_CHARACTER_OUTPUT", "characters"),
 	("ARK_RUNTIME_STAGE_OUTPUT", "stages"),
 	("ARK_RUNTIME_MODULE_OUTPUT", "modules"),
 	("ARK_RUNTIME_FAVOR_OUTPUT", "favor"),
+	("ARK_RUNTIME_HANDBOOK_OUTPUT", "handbook"),
 ];
 
 #[derive(Clone)]
@@ -32,6 +33,8 @@ pub(crate) struct Battle {
 	/// Unity time scale of a presented battle (1, 2, 4, 8 or 16): game seconds per real second.
 	pub time_scale: u32,
 	pub difficulty: Difficulty,
+	/// A paradox simulation from the original handbook, which the client converts as a memory.
+	pub memory: bool,
 }
 
 /// The original difficulty a battle starts at; the original level applies its runes for it.
@@ -496,6 +499,10 @@ pub(crate) fn run(config: &RuntimeConfig, request: &Request) -> Result<(PathBuf,
 					battle.difficulty.original().to_string(),
 				),
 				(
+					"ARK_RUNTIME_MEMORY_LEVEL",
+					u8::from(battle.memory).to_string(),
+				),
+				(
 					"ARK_RUNTIME_BATTLE_LEVEL_ID",
 					services.as_ref().unwrap()["level_id"]
 						.as_str()
@@ -553,11 +560,17 @@ pub(crate) fn run(config: &RuntimeConfig, request: &Request) -> Result<(PathBuf,
 			.battle
 			.as_ref()
 			.filter(|battle| battle.presentation != Presentation::Fast);
-		// A presented battle runs in game seconds: 30 ticks per second at speed 1 and scale 1.
-		let deadline: u64 = presented.map_or(request.deadline, |battle| {
-			let rate: u64 = 30 * u64::from(battle.speed) * u64::from(battle.time_scale);
-			(120 + u64::from(battle.max_ticks) / rate).min(900)
-		});
+		// A presented battle runs in game seconds: 30 ticks per second at speed 1 and scale 1. A
+		// fast battle ticks back to back, yet a long one such as an annihilation, with hundreds of
+		// enemies over tens of thousands of ticks, still outlasts a fixed half minute.
+		let deadline: u64 = match (&request.battle, presented) {
+			(_, Some(battle)) => {
+				let rate: u64 = 30 * u64::from(battle.speed) * u64::from(battle.time_scale);
+				(120 + u64::from(battle.max_ticks) / rate).min(900)
+			}
+			(Some(battle), None) => (60 + u64::from(battle.max_ticks) / 200).min(900),
+			(None, None) => request.deadline,
+		};
 		let visible: bool =
 			presented.is_some_and(|battle| battle.presentation == Presentation::Watch);
 		let mut result = player::run(&copied, &run, &env, completion, deadline, visible)?;
@@ -794,6 +807,7 @@ fn evaluate(
 				"original_stage_identity_exported",
 				"original_module_table_exported",
 				"original_favor_table_exported",
+				"original_handbook_table_exported",
 			]);
 		result["identity_tables"] = identities;
 		result["identity_tables_exported"] = json!(verified);
@@ -803,9 +817,13 @@ fn evaluate(
 		let resource = result["runtime_diagnostics"]["object_pool_failure_messages"] == 0
 			&& result["runtime_diagnostics"]["resource_manager_null_reference_observed"] == false;
 		let converted = run.join("converted-squad.json");
-		let squad_verified = converted.is_file()
-			&& stages.contains("original_battle_squad_exported")
-			&& squad::verify(&battle.squad, &io::read_json(&converted)?);
+		let squad_use: Option<Value> =
+			if converted.is_file() && stages.contains("original_battle_squad_exported") {
+				squad::verify(&battle.squad, &io::read_json(&converted)?)
+			} else {
+				None
+			};
+		let squad_verified: bool = squad_use.is_some();
 		let init = has(&[
 			"original_battle_load_game_complete",
 			"original_battle_started",
@@ -826,6 +844,8 @@ fn evaluate(
 			.count() as u64;
 		let actions = queued == verified + auto;
 		let completed = maximum("original_maa_completed_action_count");
+		// Steps abandoned at their MAA timeout count as completed, as MAA moves on past them.
+		let skipped = maximum("original_maa_skipped_action_count");
 		let remaining = maa::command_count(&battle.actions) as i64 - completed as i64;
 		let job = stages.contains("original_maa_job_complete") && remaining == 0;
 		let outcome = outcome(result)?;
@@ -847,11 +867,13 @@ fn evaluate(
 		for (key, value) in [
 			("battle_resource_load_verified", json!(resource)),
 			("squad_verified", json!(squad_verified)),
+			("squad_use", json!(squad_use)),
 			("battle_initialization_verified", json!(init)),
 			("verified_action_count", json!(verified)),
 			("automatic_skill_count", json!(auto)),
 			("battle_actions_verified", json!(actions)),
 			("completed_action_count", json!(completed)),
+			("skipped_action_count", json!(skipped)),
 			("remaining_action_count", json!(remaining)),
 			("maa_job_complete", json!(job)),
 			("job_result", json!(job_result)),

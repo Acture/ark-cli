@@ -54,7 +54,9 @@ impl TrainingArgs {
 struct BattleArgs {
 	#[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(0..=2_147_483_647))]
 	seed: u32,
-	#[arg(long, default_value_t = 36_000, value_parser = clap::value_parser!(u32).range(1..=54_000))]
+	/// Original battle ticks (30 per second of battle time) before a run stops; annihilation stages
+	/// need most of the 30 minutes.
+	#[arg(long, default_value_t = 54_000, value_parser = clap::value_parser!(u32).range(1..=54_000))]
 	max_ticks: u32,
 	#[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..=8))]
 	resource_rounds: u32,
@@ -298,7 +300,7 @@ fn execute(args: BattleCommand) -> Result<Value> {
 			job,
 			output,
 			training,
-		} => runtime.squad_for(&job, &output, &training.training()),
+		} => runtime.squad_for(&job, &output, &training.training(), None),
 		Action::MinTraining {
 			job,
 			search,
@@ -380,7 +382,7 @@ mod tests {
 		assert_eq!(training.training(), Training::default());
 		assert_eq!(
 			(battle.seed, battle.max_ticks, battle.resource_rounds),
-			(1, 36_000, 3)
+			(1, 54_000, 3)
 		);
 		assert!(!battle.no_lua_hotfix && !repeat);
 	}

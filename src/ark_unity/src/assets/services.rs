@@ -15,7 +15,7 @@ const BUILTINS: [&str; 3] = [
 	"sharedassets0.assets",
 	"sharedassets1.assets",
 ];
-const TABLES: [&str; 23] = [
+const TABLES: [&str; 24] = [
 	"BattleMiscDB",
 	"BuffTemplateDB",
 	"BuffDB",
@@ -36,6 +36,8 @@ const TABLES: [&str; 23] = [
 	"FavorDB",
 	"SkinDB",
 	"StageDB",
+	// Paradox simulation stages live in the operator handbook, not the stage table.
+	"HandbookInfoDB",
 	"TokenDB",
 	"SpecialOperatorDB",
 	"CharWordDB",

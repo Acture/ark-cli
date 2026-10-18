@@ -376,7 +376,7 @@ unsafe fn load_services(
 		}
 		record("original_service_table_validated");
 		if environment_flag(b"ARK_RUNTIME_EXPORT_IDENTITIES") {
-			// Operator, stage, module and trust tables, serialized by the original tables.
+			// Operator, stage, module, trust and handbook tables, serialized by the original tables.
 			for (name, output, stage) in [
 				(
 					b"CharacterDB\0".as_slice(),
@@ -397,6 +397,11 @@ unsafe fn load_services(
 					b"FavorDB\0".as_slice(),
 					b"ARK_RUNTIME_FAVOR_OUTPUT".as_slice(),
 					"original_favor_table_exported",
+				),
+				(
+					b"HandbookInfoDB\0".as_slice(),
+					b"ARK_RUNTIME_HANDBOOK_OUTPUT".as_slice(),
+					"original_handbook_table_exported",
 				),
 			] {
 				if class != api.class_named(game, b"Torappu\0", name)? {
@@ -1273,7 +1278,7 @@ unsafe fn custom_squad(
 		unsafe extern "C" fn(Pointer, usize) -> Pointer
 	);
 	let size: i32 = length(text);
-	if size <= 0 || size > 24000 {
+	if !(0..=24000).contains(&size) {
 		return Err("custom_squad_size_invalid");
 	}
 	let data: *const u16 = chars(text);
@@ -1283,7 +1288,8 @@ unsafe fn custom_squad(
 			count += 1;
 		}
 	}
-	if !(1..=12).contains(&count) || data.offset((size - 1) as isize).read() != 10 {
+	// Twelve squad members and a support operator, or none when the level deals its own.
+	if !(0..=13).contains(&count) || (size > 0 && data.offset((size - 1) as isize).read() != 10) {
 		return Err("custom_squad_count_invalid");
 	}
 	let slot_class: Pointer = api.class_named(game, b"Torappu\0", b"AdvancedCharacterInst\0")?;
@@ -1459,7 +1465,8 @@ unsafe fn create_battle_input(
 	let slots: Pointer = squad
 		.as_ref()
 		.map_or(core::ptr::null_mut(), |value| value.0);
-	let mut memory: u8 = (!custom) as u8;
+	// Original isMemory: the client converts a paradox simulation from the handbook as a memory.
+	let mut memory: u8 = (!custom || environment_flag(b"ARK_RUNTIME_MEMORY_LEVEL")) as u8;
 	let mut reset: u8 = 1;
 	let mut selectable: u8 = 0;
 	let player: Pointer = api.call(
