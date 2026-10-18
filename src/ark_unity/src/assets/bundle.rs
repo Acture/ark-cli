@@ -455,10 +455,12 @@ mod tests {
 	}
 
 	fn rejected_directory(bytes: &[u8], reason: &str) {
+		// Parallel tests can read the same clock value; the counter keeps their files apart.
+		static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 		let path: std::path::PathBuf = std::env::temp_dir().join(format!(
 			"ark-bundle-invalid-{}-{}.ab",
 			std::process::id(),
-			chrono::Utc::now().timestamp_nanos_opt().unwrap()
+			NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 		));
 		std::fs::write(&path, bytes).unwrap();
 		let error = load(&path).unwrap_err();
