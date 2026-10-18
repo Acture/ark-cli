@@ -413,7 +413,7 @@ impl BattleRuntime {
 	) -> Result<BTreeSet<String>> {
 		let stage: Value = resolve_stage(&job["stage_name"], tables, &catalog.assets)?;
 		let (_, decoded) = self.decode_level(catalog, stage["level_id"].as_str().unwrap())?;
-		Ok(maa::level_units(&decoded, maa::difficulty(job, difficulty)?).cards)
+		Ok(dealt_units(&decoded, maa::difficulty(job, difficulty)?, &stage).cards)
 	}
 
 	/// Lower training from the maximum while the original engine still wins, for the lowest
@@ -858,7 +858,7 @@ impl BattleRuntime {
 			&squad,
 			&tables["characters"],
 			&tables["modules"],
-			&maa::level_units(&decoded, difficulty),
+			&dealt_units(&decoded, difficulty, &stage),
 		)?;
 		if let Some(program) = program {
 			program::apply(&mut plan, program)?;
@@ -1031,6 +1031,17 @@ impl BattleRuntime {
 	}
 }
 
+/// What the level brings besides the squad at a difficulty. A paradox simulation's featured
+/// operator is the squad's: the original conversion of a memory puts it in place of the level's
+/// card, while its other operators stay the level's.
+fn dealt_units(decoded: &Value, difficulty: Difficulty, stage: &Value) -> maa::LevelUnits {
+	let mut units: maa::LevelUnits = maa::level_units(decoded, difficulty);
+	if let Some(featured) = stage["memory_operator"].as_str() {
+		units.cards.remove(featured);
+	}
+	units
+}
+
 /// The MAA-shaped job of an MAA job or a battle program.
 fn maa_job(input: Value) -> Result<Value> {
 	if program::is_program(&input) {
@@ -1119,10 +1130,15 @@ fn resolve_stage(
 				.as_str()
 				.is_some_and(|id| id.eq_ignore_ascii_case(&level))
 	});
-	let memory: bool = stages
+	// A paradox simulation names its featured operator in the handbook.
+	let memory: Option<&Value> = stages
 		.iter()
-		.any(|(id, _, memory)| *memory && ids.iter().any(|wanted| wanted == id));
-	Ok(json!({"level_id":level,"stage_ids":ids.join(","),"challenge":challenge,"memory":memory}))
+		.find(|(id, _, memory)| *memory && ids.iter().any(|wanted| wanted == id))
+		.map(|(_, stage, _)| *stage);
+	Ok(
+		json!({"level_id":level,"stage_ids":ids.join(","),"challenge":challenge,
+		"memory":memory.is_some(),"memory_operator":memory.map_or(&Value::Null, |stage| &stage["charId"])}),
+	)
 }
 
 fn observed_requests(log: &str) -> BTreeSet<String> {
@@ -1416,7 +1432,8 @@ mod tests {
 			"some_original_id#f#":{"code":"EV-3","levelId":"A/level_foo","difficulty":"FOUR_STAR"},
 			"other_id":{"code":"EV-4","levelId":"a/level_bar","difficulty":"NORMAL"}}},
 			"handbook":{"handbookStageData":{"char_fixture":
-				{"stageId":"mem_fixture_1","levelId":"a/level_memory","code":"MEM-1"}}}});
+				{"stageId":"mem_fixture_1","levelId":"a/level_memory","code":"MEM-1",
+					"charId":"char_fixture"}}}});
 		let stage: Value = resolve_stage(&json!("ev-3"), &table, &assets).unwrap();
 		assert_eq!(stage["level_id"], "a/level_foo");
 		assert_eq!(stage["challenge"], true);
@@ -1436,6 +1453,7 @@ mod tests {
 		assert_eq!(stage["level_id"], "a/level_memory");
 		assert_eq!(stage["stage_ids"], "mem_fixture_1");
 		assert_eq!(stage["memory"], true);
+		assert_eq!(stage["memory_operator"], "char_fixture");
 		assert_eq!(
 			resolve_stage(&json!("ev-3"), &table, &assets).unwrap()["memory"],
 			false

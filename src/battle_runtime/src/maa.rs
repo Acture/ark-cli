@@ -52,7 +52,7 @@ pub(crate) fn operators_by_name(identities: &Value) -> Result<BTreeMap<String, V
 /// repeat across the table, so only the level's own cards are candidates for them.
 /// The card the level deals under an original name: an operator at the level's fixed training,
 /// or a device.
-fn level_card(
+pub(crate) fn level_card(
 	identities: &Value,
 	level_cards: &BTreeSet<String>,
 	name: &str,
@@ -90,7 +90,7 @@ pub(crate) fn token_by_name(
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LevelUnits {
 	/// The cards the level deals, such as a device or an operator at fixed training, hidden ones
-	/// included.
+	/// included, except a paradox simulation's featured operator, which the squad brings.
 	pub cards: BTreeSet<String>,
 	/// The units the level places before the battle, by tile (column, row).
 	pub placed: BTreeMap<(i64, i64), String>,
@@ -418,8 +418,13 @@ pub(crate) fn translate(
 		.as_array()
 		.context("opers must be array")?
 	{
-		let id = select(op)?.context("Operator missing or below requirements")?;
-		bind(&mut seen, operator_name(op)?, id, op)?;
+		let name: &str = operator_name(op)?;
+		// An operator the level deals is its card at the level's training, not the squad's.
+		let id: String = match level_card(identities, &level.cards, name)? {
+			Some(id) => id,
+			None => select(op)?.context("Operator missing or below requirements")?,
+		};
+		bind(&mut seen, name, id, op)?;
 	}
 	for group in job
 		.get("groups")
@@ -590,9 +595,7 @@ pub(crate) fn translate(
 		owed = delay(action, "post_delay", speed)? + delay(action, "rear_delay", speed)?;
 		if matches!(kind, "speed_up" | "skill_daemon" | "camera" | "output") {
 			ensure!(
-				["name", "location", "direction"]
-					.iter()
-					.all(|k| action.get(k).is_none()),
+				["name", "location"].iter().all(|k| action.get(k).is_none()),
 				"Unexpected control action target"
 			);
 			ensure!(
@@ -619,10 +622,6 @@ pub(crate) fn translate(
 			continue;
 		}
 		if kind == "bullet_time" {
-			ensure!(
-				action.get("direction").is_none(),
-				"Direction on a BulletTime action"
-			);
 			ensure!(
 				action.get("name").is_some() || action.get("location").is_some(),
 				"BulletTime needs a name or a location"
@@ -691,10 +690,7 @@ pub(crate) fn translate(
 			});
 			positions.insert((col, row), target);
 		} else {
-			ensure!(
-				action.get("direction").is_none(),
-				"Direction on a non-Deploy action"
-			);
+			// MAA reads a direction for every action and uses it only to deploy.
 			// A located Skill/Retreat must find the named unit on that tile; the probe checks it.
 			if let Some((col, row)) = location {
 				ensure!(kind != "skill_usage", "SkillUsage takes no location");
@@ -748,32 +744,38 @@ pub(crate) fn concrete_job(
 			.context("Command has no source action")? as usize
 			+ 1
 	};
-	let training = |label: &str| -> Result<Value> {
+	// The training a bound operator ran at; none for the level's own card, whose training the
+	// level fixes.
+	let training = |label: &str| -> Result<Option<Value>> {
 		let id = plan["bindings"][label]
 			.as_str()
 			.with_context(|| format!("Unbound operator {label}"))?;
-		let actual = squad["operators"]
+		let Some(actual) = squad["operators"]
 			.as_array()
 			.into_iter()
 			.flatten()
 			.find(|op| op["character_id"] == id)
-			.with_context(|| format!("{id} is not in the squad"))?;
+		else {
+			return Ok(None);
+		};
 		let module: i64 = actual["modules"]
 			.as_array()
 			.and_then(|list| list.first())
 			.and_then(|module| modules["equipDict"][module["key"].as_str()?]["typeName2"].as_str())
 			.and_then(|letter| ["X", "Y", "A", "D", "B"].iter().position(|l| *l == letter))
 			.map_or(0, |position| position as i64 + 1);
-		Ok(
+		Ok(Some(
 			json!({"elite":actual["phase"],"level":actual["level"],"skill_level":actual["skill_level"],
 			"potentiality":actual["potential_rank"].as_i64().unwrap_or(0) + 1,"module":module}),
-		)
+		))
 	};
 	let mut concrete: Value = job.clone();
 	if let Some(operators) = concrete.get_mut("opers").and_then(Value::as_array_mut) {
 		for operator in operators {
 			let name: String = operator_name(operator)?.to_owned();
-			operator["requirements"] = training(&name)?;
+			if let Some(requirements) = training(&name)? {
+				operator["requirements"] = requirements;
+			}
 		}
 	}
 	if let Some(groups) = concrete.get_mut("groups").and_then(Value::as_array_mut) {
@@ -795,7 +797,8 @@ pub(crate) fn concrete_job(
 				})
 				.cloned()
 				.with_context(|| format!("Group {label} has no executed member"))?;
-			chosen["requirements"] = training(&label)?;
+			chosen["requirements"] =
+				training(&label)?.context("A group member comes from the squad")?;
 			group["opers"] = json!([chosen]);
 		}
 	}
@@ -1290,22 +1293,23 @@ mod tests {
 		.unwrap();
 		assert_eq!(plan["bindings"]["乙"], "char_fixture_b");
 		assert_eq!(plan["undeclared"], json!(["乙"]));
-		// An undeclared name is the level's card, hidden until the battle reveals it, or a summon
-		// before it is a squad operator. A declared operator stays the squad's, which a paradox
-		// simulation's original conversion puts in place of the level's card.
+		// A card the level deals, hidden until the battle reveals it, or a summon of that name is
+		// never the squad's operator, declared or not; a direction on a Skill is ignored, as MAA
+		// ignores it.
 		let mut identities = identities;
 		identities["token_fixture_summon"] = json!({"name":"召唤"});
 		identities["char_fixture_summon"] = json!({"name":"召唤"});
 		job["opers"] = json!([{"name":"乙","skill":1}]);
 		job["actions"] = json!([{"type":"Deploy","name":"甲","location":[1,1],"direction":"Up"},
 			{"type":"Deploy","name":"乙","location":[2,1],"direction":"Up"},
-			{"type":"Deploy","name":"召唤","location":[3,1],"direction":"Up"}]);
+			{"type":"Deploy","name":"召唤","location":[3,1],"direction":"Up"},
+			{"type":"Skill","name":"乙","location":[2,1],"direction":"Left"}]);
 		let dealt: Value = json!({"predefines":{"characterCards":[
 			{"hidden":true,"inst":{"characterKey":"char_fixture_a"}},
 			{"hidden":false,"inst":{"characterKey":"char_fixture_b"}}]}});
 		let plan: Value = translate(
 			&job,
-			&squad,
+			&json!({"schema":"ark-battle-squad-v2","operators":[]}),
 			&identities,
 			&json!({}),
 			&level_units(&dealt, Difficulty::Normal),
@@ -1316,6 +1320,19 @@ mod tests {
 		let native: String = compile(&plan, 0).unwrap();
 		assert!(native.contains("|char_fixture_a\n"), "{native}");
 		assert!(native.contains("|token_fixture_summon\n"), "{native}");
+		// A paradox simulation's featured operator is no level card: the squad brings it.
+		let mut featured: LevelUnits = level_units(&dealt, Difficulty::Normal);
+		featured.cards.remove("char_fixture_b");
+		assert!(translate(
+			&job,
+			&json!({"schema":"ark-battle-squad-v2","operators":[]}),
+			&identities,
+			&json!({}),
+			&featured,
+		)
+		.is_err());
+		let plan: Value = translate(&job, &squad, &identities, &json!({}), &featured).unwrap();
+		assert_eq!(plan["bindings"]["乙"], "char_fixture_b");
 		// A three-row level placing a device on its position row 0: deploys count that row 2.
 		let level: Value = json!({"mapData":{"map":[[0,0],[0,0],[0,0]]},
 			"predefines":{"tokenInsts":[{"position":{"row":0,"col":1},

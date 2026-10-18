@@ -281,7 +281,8 @@ interval and retry limits. Results are therefore those of ideal timing.
 | Skill on an active, suspendable skill | The press suspends the skill, as MAA's click does |
 | kills, costs, cost_changes, cooling | Conditions in MAA's order: cost_changes, kills, costs, cooling (exactly N cooling) |
 | Level cards and summon names (for example `干扰地雷`, `“弦惊”`) | Names resolve to a card the level deals at the running difficulty, hidden ones included, else, for undeclared names, to one original summon token; their Deploy may take direction `None`, which faces up as the levels' own devices do |
-| Operators the level deals (paradox simulations, story stages) | An undeclared name is the level's card at its fixed training; a declared operator comes from the squad, which the original conversion of a paradox simulation puts in place of the level's card of that operator |
+| Operators the level deals (paradox simulations, story stages) | The level's card at its fixed training, declared or not; a paradox simulation's featured operator, named by the original handbook, comes from the squad, which the original conversion puts in place of the level's card |
+| direction on a non-Deploy action | Ignored, as MAA uses a direction only to deploy |
 | Skill/Retreat with name and location | The named unit must stand on that tile when it acts |
 | Skill/Retreat with only a location | The unit on that tile: the level's own device, or the job's latest deploy there |
 | pre_delay, post_delay, rear_delay | Waits in ticks at the speed the job set (30 per second at speed 1, 60 after SpeedUp): a pre delay after the action's conditions, a post or rear delay before the next action's |

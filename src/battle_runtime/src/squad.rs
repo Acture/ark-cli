@@ -239,8 +239,8 @@ pub(crate) struct Tables<'a> {
 	pub favor: &'a Value,
 }
 
-/// The squad a job names at a training. An undeclared name of a card the level deals, from
-/// `level_cards`, or of a summon stays out of it.
+/// The squad a job names at a training. Operators the level deals, from `level_cards`, and
+/// undeclared names of summons stay out of it.
 pub(crate) fn for_job(
 	job: &Value,
 	tables: &Tables<'_>,
@@ -267,6 +267,10 @@ pub(crate) fn for_job(
 		.unwrap_or(&empty);
 	for op in direct {
 		let name = crate::maa::operator_name(op)?;
+		// The level's card of this operator replaces the squad's.
+		if crate::maa::level_card(tables.characters, level_cards, name)?.is_some() {
+			continue;
+		}
 		let candidates = by_name.get(name).context("Unknown original operator")?;
 		ensure!(candidates.len() == 1, "Ambiguous original operator {name}");
 		let id = &candidates[0];
@@ -586,7 +590,8 @@ mod tests {
 	fn undeclared_deploys_join_unless_the_level_deals_them() {
 		let job = json!({"opers":[{"name":"甲"}],"actions":[
 			{"type":"Deploy","name":"甲"},{"type":"Deploy","name":"丙"}]});
-		// A declared operator always joins, as the paradox simulations' own operators do.
+		// A declared operator joins unless the level deals it, as a paradox simulation deals
+		// all but its featured operator.
 		let ids = |squad: &Value| -> Vec<String> {
 			squad["operators"]
 				.as_array()
@@ -599,12 +604,14 @@ mod tests {
 			ids(&generate(&job, &Training::default()).unwrap()),
 			["char_fixture_a", "char_fixture_c"]
 		);
-		let dealt: BTreeSet<String> =
-			BTreeSet::from(["char_fixture_a".to_owned(), "char_fixture_c".to_owned()]);
+		let dealt: BTreeSet<String> = BTreeSet::from(["char_fixture_c".to_owned()]);
 		assert_eq!(
 			ids(&generate_with(&job, &Training::default(), &dealt).unwrap()),
 			["char_fixture_a"]
 		);
+		let dealt: BTreeSet<String> =
+			BTreeSet::from(["char_fixture_a".to_owned(), "char_fixture_c".to_owned()]);
+		assert!(ids(&generate_with(&job, &Training::default(), &dealt).unwrap()).is_empty());
 	}
 
 	#[test]
