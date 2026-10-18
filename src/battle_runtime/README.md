@@ -149,7 +149,10 @@ or conditions out of MAA's order). A won program's evidence is `concrete-program
 Results assume ideal timing. `--delay N` gives every unit operation, and every skill policy, a
 declared latency such as a screen-recognition client's: once its conditions are met, the
 operation must stay ready N ticks (30 per second at speed 1) before it is issued, restarting
-whenever it is not ready. A step's own `delay` takes precedence.
+whenever it is not ready. A step's own `delay` takes precedence. The default stays 0; when
+`run` or the maximum tier of `min-training` loses or runs out of ticks at 0, the report's
+`timing_hint` (also printed) suggests trying a delay, since some jobs win only with MAA's
+latency.
 `battle latency JOB` bisects the largest delay, up to `--max-delay` ticks, at which the job still
 wins without a leak, so a result can be stated with the latency it tolerates.
 

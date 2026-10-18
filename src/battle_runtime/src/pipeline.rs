@@ -585,7 +585,14 @@ impl BattleRuntime {
 				"mechanics are enumerated because skill timing can make lower mastery or module win where higher loses; stat bisection assumes higher level and trust never lose where lower win, so where a job breaks that, the result passes but may not be the lowest; job requirements stay floors",
 			),
 		};
+		let hint: Option<&str> = attempts
+			.first()
+			.and_then(|first| timing_hint(&first["battle_outcome"], options.delay));
+		if let Some(hint) = hint {
+			eprintln!("INFO ark_battle_runtime: {hint}");
+		}
 		let report = json!({"schema":"ark-battle-training-ladder-v3","job":job_path,"maximum_passed":maximum_passed,
+			"timing_hint":hint,
 			"search_mode":search.name(),"per_operator":per_operator,"allow_leaks":allow_leaks,
 			"training_applies":training_applies,
 			"lowest_passing_training":if maximum_passed && training_applies { squad_training_json(&current) } else { Value::Null },
@@ -616,6 +623,10 @@ impl BattleRuntime {
 		};
 		let mut report: Value = self.run_maa(job_path, squad_path, options)?;
 		report["squad"] = json!(squad_path);
+		if let Some(hint) = timing_hint(&report["battle_outcome"]["status"], options.delay) {
+			eprintln!("INFO ark_battle_runtime: {hint}");
+			report["timing_hint"] = json!(hint);
+		}
 		Ok(report)
 	}
 
@@ -1031,6 +1042,17 @@ impl BattleRuntime {
 	}
 }
 
+/// A note for a run that issued every operation as soon as its conditions held and still lost
+/// or ran out of ticks: MAA issues each later, from screen recognition, and some jobs win only
+/// with that latency. The default stays ideal timing.
+fn timing_hint(status: &Value, delay: u32) -> Option<&'static str> {
+	(delay == 0 && (status == "original_loss" || status == "tick_budget_exhausted")).then_some(
+		"This run issued every operation as soon as its conditions held. MAA issues each later, \
+		 from screen recognition, and some jobs win only with that latency: try --delay 15, 30 \
+		 or 60 (ticks, 30 per second at speed 1).",
+	)
+}
+
 /// What the level brings besides the squad at a difficulty. A paradox simulation's featured
 /// operator is the squad's: the original conversion of a memory puts it in place of the level's
 /// card, while its other operators stay the level's.
@@ -1420,6 +1442,14 @@ mod tests {
 			..Default::default()
 		};
 		assert!(options.validate().is_err());
+	}
+	#[test]
+	fn only_an_ideal_timing_loss_suggests_latency() {
+		assert!(timing_hint(&json!("original_loss"), 0).is_some());
+		assert!(timing_hint(&json!("tick_budget_exhausted"), 0).is_some());
+		assert!(timing_hint(&json!("original_loss"), 30).is_none());
+		assert!(timing_hint(&json!("original_win"), 0).is_none());
+		assert!(timing_hint(&json!("runtime_error"), 0).is_none());
 	}
 	#[test]
 	fn stage_codes_resolve_through_original_table() {
