@@ -464,7 +464,7 @@ impl BattleRuntime {
 					.collect()
 			});
 			// A tier passes when the original engine wins, even before later commands become due,
-			// and, unless leaks are allowed, no enemy reached an exit.
+			// and, unless leaks are allowed, no life point was lost.
 			let passed: bool = report["passed"] == true
 				&& report["battle_outcome"]["status"] == "original_win"
 				&& (allow_leaks || report["battle_events"]["perfect"] == true);

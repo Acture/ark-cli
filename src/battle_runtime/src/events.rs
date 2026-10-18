@@ -15,10 +15,12 @@ fn fixed_scale(events: &[Value], texts: &[&str]) -> Option<f64> {
 	(text > 0.0).then_some(raw / text)
 }
 
-/// Leaks, life points lost, kills and skill activity from a run's observer log. An enemy that
-/// leaves the field with hit points left reached an exit; one killed leaves at zero. The original
-/// takes the life point when an enemy reaches the exit and removes the enemy some ticks later, so
-/// a life point lost with no enemy leaving after it is a leak the battle ended before removing.
+/// Leaks, life points lost, kills and skill activity from a run's observer log. A leak is an
+/// enemy reaching an exit at the cost of life points. The original takes the life point when the
+/// enemy arrives and removes it some ticks later with its hit points left, so each life point lost
+/// is answered by the next enemy leaving with hit points; one unanswered is a leak the battle
+/// ended before removing. An enemy leaving with hit points that answers no life point lost, such
+/// as a unit that passes through, is an exit without life loss, not a leak.
 pub(crate) fn summarize(observer: &Path) -> Result<Value> {
 	let text: String =
 		fs::read_to_string(observer).with_context(|| format!("Read {}", observer.display()))?;
@@ -48,9 +50,9 @@ pub(crate) fn summarize(observer: &Path) -> Result<Value> {
 	let mut life: Vec<Value> = Vec::new();
 	let mut skills: usize = 0;
 	let mut entered: Vec<(i64, Value)> = Vec::new();
-	// Ticks of life points lost, and of enemies leaving with hit points.
-	let mut lost: Vec<i64> = Vec::new();
-	let mut left: Vec<i64> = Vec::new();
+	// Ticks of life points lost, and enemies leaving with hit points.
+	let mut lost: Vec<Value> = Vec::new();
+	let mut left: Vec<Value> = Vec::new();
 	let mut previous_life: Option<i64> = None;
 	for event in &events {
 		let tick: &Value = &event["tick"];
@@ -64,13 +66,12 @@ pub(crate) fn summarize(observer: &Path) -> Result<Value> {
 					.iter()
 					.find(|(id, _)| *id == unit)
 					.map_or(Value::Null, |(_, raw)| points(raw));
-				leaks.push(json!({"tick": tick, "hp": points(&event["value"]), "max_hp": maximum}));
-				left.push(tick.as_i64().unwrap_or(0));
+				left.push(json!({"tick": tick, "hp": points(&event["value"]), "max_hp": maximum}));
 			}
 			"life" => {
 				let value: i64 = event["value"].as_i64().unwrap_or(0);
 				if previous_life.is_none_or(|previous| value < previous) {
-					lost.push(tick.as_i64().unwrap_or(0));
+					lost.push(tick.clone());
 				}
 				previous_life = Some(value);
 				life.push(json!({"tick": tick, "life_point": event["value"]}));
@@ -82,14 +83,26 @@ pub(crate) fn summarize(observer: &Path) -> Result<Value> {
 	// Each life point lost is answered by the first enemy leaving with hit points at or after it.
 	let mut answered: Vec<bool> = vec![false; left.len()];
 	for tick in lost {
-		match (0..left.len()).find(|&index| !answered[index] && left[index] >= tick) {
-			Some(index) => answered[index] = true,
+		let at: i64 = tick.as_i64().unwrap_or(0);
+		match (0..left.len())
+			.find(|&index| !answered[index] && left[index]["tick"].as_i64().unwrap_or(0) >= at)
+		{
+			Some(index) => {
+				answered[index] = true;
+				leaks.push(json!({"tick": tick, "hp": left[index]["hp"],
+					"max_hp": left[index]["max_hp"]}));
+			}
 			None => leaks.push(
 				json!({"tick": tick, "hp": Value::Null, "max_hp": Value::Null,
 				"ended_before_leaving": true}),
 			),
 		}
 	}
+	let exits: Vec<Value> = left
+		.into_iter()
+		.zip(answered)
+		.filter_map(|(exit, answered)| (!answered).then_some(exit))
+		.collect();
 	let enemies: usize = entered.len();
 	let kills: Value = events
 		.iter()
@@ -99,6 +112,7 @@ pub(crate) fn summarize(observer: &Path) -> Result<Value> {
 	Ok(json!({
 		"leaks": leaks,
 		"leak_count": leaks.len(),
+		"exits_without_life_loss": exits,
 		"perfect": leaks.is_empty() && life.is_empty(),
 		"life_changes": life,
 		"enemies": enemies,
@@ -148,8 +162,8 @@ mod tests {
 			json!({"stage":"original_event","tick":tick,"kind":kind,"unit":unit,"value":value})
 				.to_string()
 		};
-		// A harmless exit costs no life; the first leak's enemy leaves 29 ticks after its life
-		// point; the second ends the battle before its enemy leaves.
+		// An exit that costs no life is no leak; the first leak's enemy leaves 29 ticks after its
+		// life point; the second ends the battle before its enemy leaves.
 		let lines: Vec<String> = vec![
 			event(10, "enemy_enter", 1, 100),
 			event(10, "enemy_enter", 2, 100),
@@ -162,8 +176,14 @@ mod tests {
 		fs::write(&path, lines.join("\n")).unwrap();
 		let summary: Value = summarize(&path).unwrap();
 		fs::remove_dir_all(&directory).unwrap();
-		assert_eq!(summary["leak_count"], 3);
-		assert_eq!(summary["leaks"][2]["tick"], 300);
-		assert_eq!(summary["leaks"][2]["ended_before_leaving"], true);
+		assert_eq!(summary["leak_count"], 2);
+		assert_eq!(
+			summary["leaks"][0],
+			json!({"tick":100,"hp":Value::Null,"max_hp":Value::Null})
+		);
+		assert_eq!(summary["leaks"][1]["tick"], 300);
+		assert_eq!(summary["leaks"][1]["ended_before_leaving"], true);
+		assert_eq!(summary["exits_without_life_loss"][0]["tick"], 40);
+		assert_eq!(summary["perfect"], false);
 	}
 }

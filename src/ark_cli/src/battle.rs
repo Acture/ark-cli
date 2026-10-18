@@ -201,7 +201,7 @@ enum Action {
 		/// After the team ladder, lower each operator alone for per-operator minimums.
 		#[arg(long)]
 		per_operator: bool,
-		/// Pass a tier that wins although enemies reached an exit (default: no leaks).
+		/// Pass a tier that wins although life points were lost (default: no leaks).
 		#[arg(long)]
 		allow_leaks: bool,
 		#[command(flatten)]

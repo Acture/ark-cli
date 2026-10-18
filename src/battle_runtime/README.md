@@ -106,7 +106,7 @@ result passes without being the lowest.
 `--per-operator` continues from the team result and lowers each operator alone, in squad order,
 for per-operator minimums. Both searches are greedy across axes and operators, so their order can
 matter. Every tier is an original-engine run, and a squad that two trainings generate runs once.
-A tier passes when the original engine wins with no enemy reaching an exit; `--allow-leaks` also
+A tier passes when the original engine wins with no life point lost; `--allow-leaks` also
 passes wins that leak. `ladder.json` lists every attempt with its remaining life points and leaks,
 its concrete job and the lowest passing training. Where the original deck holds no squad operator,
 `training_applies` is false and no lower training is tried; `--per-operator` lowers only operators
@@ -205,8 +205,11 @@ Every tick the probe also records battle events (`original_event`): enemies ente
 with their raw fixed-point hit points, life point and kill count changes, operators entering and
 leaving, and skills starting and ending. These are read-only original getters; a run with and
 without them is identical. `report.json` summarizes them as `battle_events`: each leak (an enemy
-leaving with hit points left) with its tick and hit points, life point changes, and `perfect` when
-nothing leaked.
+reaching an exit at the cost of life points) with its tick and the hit points it left with, life
+point changes, `perfect` when no life point was lost, and `exits_without_life_loss` for enemies
+that left with hit points at no cost, such as units passing through. The original removes a
+leaking enemy about 30 ticks after taking the life point, so the leak that ends a battle has no
+hit points (`ended_before_leaving`).
 
 ### Presentation
 
